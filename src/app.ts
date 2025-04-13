@@ -16,10 +16,21 @@ app.use('*', express.json()) // vgl. Folie 138
 
 // Routes
 // TODO: Registrieren Sie hier die weiteren Router:
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://hacilar-api.onrender.com', // dein Frontend in der Cloud
+];
+
 app.use(cors({
-    origin: 'http://localhost:3000',
-    credentials: true, // falls Cookies oder Header wie Authorization
-  }));
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Nicht erlaubte Herkunft: ' + origin));
+    }
+  },
+  credentials: true,
+}));
 app.use("/api/artikel", artikelRouter);
 app.use("/api/artikelPosition", artikelPositionRouter);
 app.use("/api/auftrag", auftragRouter);
