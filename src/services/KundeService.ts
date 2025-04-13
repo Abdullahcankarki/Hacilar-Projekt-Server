@@ -96,7 +96,7 @@ export async function getKundeById(id: string, currentUser: LoginResource): Prom
  */
 export async function updateKunde(
   id: string,
-  data: Partial<{ name: string; password: string; email: string; adresse: string; telefon: string }>,
+  data: Partial<{ name: string; kundenNummer:string, password: string; email: string; adresse: string; telefon: string }>,
   currentUser: LoginResource
 ): Promise<KundeResource> {
   if (currentUser.role !== 'a' && currentUser.id !== id) {
@@ -104,6 +104,7 @@ export async function updateKunde(
   }
   const updateData: any = {};
   if (data.name) updateData.name = data.name;
+  if (data.kundenNummer) updateData.kundenNummer = data.kundenNummer;
   if (data.email) updateData.email = data.email;
   if (data.adresse) updateData.adresse = data.adresse;
   if (data.telefon) updateData.telefon = data.telefon;
