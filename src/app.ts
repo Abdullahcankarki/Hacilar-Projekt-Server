@@ -16,7 +16,10 @@ app.use('*', express.json()) // vgl. Folie 138
 
 // Routes
 // TODO: Registrieren Sie hier die weiteren Router:
-app.use(cors());
+app.use(cors({
+    origin: 'http://localhost:3000',
+    credentials: true, // falls Cookies oder Header wie Authorization
+  }));
 app.use("/api/artikel", artikelRouter);
 app.use("/api/artikelPosition", artikelPositionRouter);
 app.use("/api/auftrag", auftragRouter);
