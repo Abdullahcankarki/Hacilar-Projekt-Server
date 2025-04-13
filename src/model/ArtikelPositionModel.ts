@@ -2,6 +2,7 @@ import mongoose, { Schema, Types, model } from "mongoose";
 
 export interface IArtikelPosition {
   artikel: Types.ObjectId; // Artikel-ID (Referenz zu Artikel)
+  artikelName: string;
   menge: number; // Menge des Artikels
   einheit: 'kg' | 'stück' | 'kiste' | 'karton'; // Einheit der Menge
   einzelpreis: number; // Kilopreis für den Kunden
@@ -13,17 +14,17 @@ export interface IArtikelPosition {
 }
 
 const artikelPositionSchema = new Schema<IArtikelPosition>({
-  artikel: { type: Schema.Types.ObjectId, ref: 'Artikel', required: true },
-  menge: { type: Number, required: true },
+  artikel: { type: Schema.Types.ObjectId, ref: 'Artikel' },
+  artikelName: {type: String},
+  menge: { type: Number },
   einheit: {
     type: String,
     enum: ['kg', 'stück', 'kiste', 'karton'],
-    required: true,
     default: 'stück',
   },
-  einzelpreis: { type: Number, required: true },
-  gesamtgewicht: { type: Number, required: true },
-  gesamtpreis: { type: Number, required: true },
+  einzelpreis: { type: Number},
+  gesamtgewicht: { type: Number },
+  gesamtpreis: { type: Number},
   zerlegung: { type: Boolean },
   vakuum: { type: Boolean },
   bemerkung: { type: String }

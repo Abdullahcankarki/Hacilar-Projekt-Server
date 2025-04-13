@@ -22,7 +22,7 @@ async function setup() {
         mongodURI = mongo.getUri();
     }
 
-    logger.info(`Connect to mongod at ${mongodURI}`)
+    logger.info(`Connect to mongod`)
     await mongoose.connect(mongodURI);
 
     const port = process.env.HTTP_PORT ? parseInt(process.env.HTTP_PORT) : 3000;
