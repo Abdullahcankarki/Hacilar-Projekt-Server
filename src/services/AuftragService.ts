@@ -1,6 +1,6 @@
 import { Auftrag, IAuftrag } from '../model/AuftragModel'; // Pfad ggf. anpassen
 import { ArtikelPosition, IArtikelPosition } from '../model/ArtikelPositionModel'; // Pfad ggf. anpassen
-import { AuftragResource } from '../Resources'; // Pfad ggf. anpassen
+import { ArtikelPositionResource, AuftragResource } from '../Resources'; // Pfad ggf. anpassen
 
 /**
  * Berechnet für einen Auftrag das Gesamtgewicht und den Gesamtpreis,
@@ -137,21 +137,43 @@ export async function updateAuftrag(
   return convertAuftragToResource(updatedAuftrag, totals);
 }
 
-/**
- * Gibt den zuletzt erstellten Auftrag eines bestimmten Kunden zurück.
- */
-export async function getLetzterAuftragByKundenId(kundenId: string): Promise<AuftragResource | null> {
-  const auftrag = await Auftrag.find({ kunde: kundenId })
+export async function getLetzterAuftragMitPositionenByKundenId(kundenId: string): Promise<{
+  auftrag: AuftragResource;
+  artikelPositionen: ArtikelPositionResource[];
+} | null> {
+  const auftragDocs = await Auftrag.find({ kunde: kundenId })
     .populate('kunde', 'name')
-    .sort({ lieferdatum: -1, createdAt: -1 }) // neuester Auftrag zuerst
+    .sort({ lieferdatum: -1, createdAt: -1 })
     .limit(1);
 
-  if (!auftrag || auftrag.length === 0) {
-    return null;
-  }
+  if (!auftragDocs || auftragDocs.length === 0) return null;
 
-  const totals = await computeTotals(auftrag[0]);
-  return convertAuftragToResource(auftrag[0], totals);
+  const auftrag = auftragDocs[0];
+  const totals = await computeTotals(auftrag);
+  const auftragResource = convertAuftragToResource(auftrag, totals);
+
+  const positionen = await ArtikelPosition.find({
+    _id: { $in: auftrag.artikelPosition }
+  });
+
+  const positionResources: ArtikelPositionResource[] = positionen.map(pos => ({
+    id: pos._id.toString(),
+    artikel: pos.artikel.toString(),
+    artikelName: pos.artikelName,
+    menge: pos.menge,
+    einheit: pos.einheit,
+    einzelpreis: pos.einzelpreis,
+    zerlegung: pos.zerlegung,
+    vakuum: pos.vakuum,
+    bemerkung: pos.bemerkung,
+    gesamtgewicht: pos.gesamtgewicht,
+    gesamtpreis: pos.gesamtpreis,
+  }));
+
+  return {
+    auftrag: auftragResource,
+    artikelPositionen: positionResources,
+  };
 }
 
 /**

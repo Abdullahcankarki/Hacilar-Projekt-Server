@@ -8,7 +8,7 @@ import {
   updateAuftrag,
   deleteAuftrag,
   getAuftraegeByCustomerId,
-  getLetzterAuftragByKundenId,
+  getLetzterAuftragMitPositionenByKundenId,
   getLetzterArtikelFromAuftragByKundenId,
 } from '../services/AuftragService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
@@ -137,7 +137,7 @@ auftragRouter.get(
         return res.status(400).json({ error: 'Kunden-ID fehlt' });
       }
 
-      const letzterAuftrag = await getLetzterAuftragByKundenId(kundenId);
+      const letzterAuftrag = await getLetzterAuftragMitPositionenByKundenId(kundenId);
       if (!letzterAuftrag) {
         return res.status(404).json({ error: 'Kein Auftrag gefunden' });
       }
