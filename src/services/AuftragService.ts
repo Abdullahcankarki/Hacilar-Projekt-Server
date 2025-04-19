@@ -138,6 +138,23 @@ export async function updateAuftrag(
 }
 
 /**
+ * Gibt den zuletzt erstellten Auftrag eines bestimmten Kunden zurück.
+ */
+export async function getLetzterAuftragByKundenId(kundenId: string): Promise<AuftragResource | null> {
+  const auftrag = await Auftrag.find({ kunde: kundenId })
+    .populate('kunde', 'name')
+    .sort({ lieferdatum: -1, createdAt: -1 }) // neuester Auftrag zuerst
+    .limit(1);
+
+  if (!auftrag || auftrag.length === 0) {
+    return null;
+  }
+
+  const totals = await computeTotals(auftrag[0]);
+  return convertAuftragToResource(auftrag[0], totals);
+}
+
+/**
  * Löscht einen Auftrag anhand der ID.
  */
 export async function deleteAuftrag(id: string): Promise<void> {

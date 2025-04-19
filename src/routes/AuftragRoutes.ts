@@ -8,6 +8,7 @@ import {
   updateAuftrag,
   deleteAuftrag,
   getAuftraegeByCustomerId,
+  getLetzterAuftragByKundenId,
 } from '../services/AuftragService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -130,6 +131,41 @@ auftragRouter.get(
         return res.status(403).json({ error: 'Zugriff verweigert' });
       }
       res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * GET /auftraege/letzte
+ * Gibt den letzten Auftrag des eingeloggten Kunden zurück.
+ */
+auftragRouter.get(
+  '/letzte',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: 'Nicht authentifiziert' });
+      }
+
+      // Admins brauchen Kunden-ID im Query-Parameter (z. B. ?kunde=xyz)
+      const kundenId = user.role === 'a'
+        ? req.query.kunde?.toString()
+        : user.id;
+
+      if (!kundenId) {
+        return res.status(400).json({ error: 'Kunden-ID fehlt' });
+      }
+
+      const letzterAuftrag = await getLetzterAuftragByKundenId(kundenId);
+      if (!letzterAuftrag) {
+        return res.status(404).json({ error: 'Kein Auftrag gefunden' });
+      }
+
+      res.json(letzterAuftrag);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
