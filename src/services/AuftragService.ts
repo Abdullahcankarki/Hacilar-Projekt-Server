@@ -11,7 +11,7 @@ async function computeTotals(auftrag: IAuftrag): Promise<{ totalWeight: number; 
   const positions: IArtikelPosition[] = await ArtikelPosition.find({
     _id: { $in: auftrag.artikelPosition },
   });
-  
+
   const totalWeight = positions.reduce((sum, pos) => sum + pos.gesamtgewicht, 0);
   const totalPrice = positions.reduce((sum, pos) => sum + pos.gesamtpreis, 0);
 
@@ -152,6 +152,31 @@ export async function getLetzterAuftragByKundenId(kundenId: string): Promise<Auf
 
   const totals = await computeTotals(auftrag[0]);
   return convertAuftragToResource(auftrag[0], totals);
+}
+
+/**
+ * Gibt den zuletzt erstellten Auftrag eines bestimmten Kunden zurück.
+ */
+export async function getLetzterArtikelFromAuftragByKundenId(kundenId: string): Promise<string[]> {
+  const auftrag = await Auftrag.find({ kunde: kundenId })
+    .sort({ lieferdatum: -1, createdAt: -1 }) // neuester Auftrag zuerst
+    .limit(1);
+
+  if (!auftrag || auftrag.length === 0) {
+    return [];
+  }
+
+  // ArtikelPositionen laden
+  const artikelPositionen = await ArtikelPosition.find({
+    _id: { $in: auftrag[0].artikelPosition }
+  });
+
+  // Nur Artikel-IDs extrahieren (distinct)
+  const artikelIds = artikelPositionen
+    .map((pos) => pos.artikel?.toString())
+    .filter((id): id is string => !!id); // entfernt undefined/null
+
+  return artikelIds;
 }
 
 /**
