@@ -114,30 +114,6 @@ auftragRouter.get(
 );
 
 /**
- * GET /auftraege/:id
- * Ruft einen einzelnen Auftrag anhand der ID ab.
- * Admins dürfen jeden Auftrag abrufen, Kunden nur ihre eigenen.
- */
-auftragRouter.get(
-  '/:id',
-  authenticate,
-  [param('id').isMongoId().withMessage('Ungültige Auftrag-ID')],
-  validate,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const result = await getAuftragById(req.params.id);
-      // Falls der Nutzer kein Admin ist, muss der Auftrag dem eigenen Kunden zugeordnet sein.
-      if (req.user?.role !== 'a' && result.kunde !== req.user?.id) {
-        return res.status(403).json({ error: 'Zugriff verweigert' });
-      }
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  }
-);
-
-/**
  * GET /auftraege/letzte
  * Gibt den letzten Auftrag des eingeloggten Kunden zurück.
  */
@@ -171,6 +147,31 @@ auftragRouter.get(
     }
   }
 );
+
+/**
+ * GET /auftraege/:id
+ * Ruft einen einzelnen Auftrag anhand der ID ab.
+ * Admins dürfen jeden Auftrag abrufen, Kunden nur ihre eigenen.
+ */
+auftragRouter.get(
+  '/:id',
+  authenticate,
+  [param('id').isMongoId().withMessage('Ungültige Auftrag-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await getAuftragById(req.params.id);
+      // Falls der Nutzer kein Admin ist, muss der Auftrag dem eigenen Kunden zugeordnet sein.
+      if (req.user?.role !== 'a' && result.kunde !== req.user?.id) {
+        return res.status(403).json({ error: 'Zugriff verweigert' });
+      }
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 
 /**
  * GET /auftraege/kunden/:id
