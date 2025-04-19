@@ -143,7 +143,7 @@ export async function getLetzterAuftragMitPositionenByKundenId(kundenId: string)
 } | null> {
   const auftragDocs = await Auftrag.find({ kunde: kundenId })
     .populate('kunde', 'name')
-    .sort({ lieferdatum: -1, createdAt: -1 })
+    .sort({ createdAt: -1 })
     .limit(1);
 
   if (!auftragDocs || auftragDocs.length === 0) return null;
@@ -181,7 +181,7 @@ export async function getLetzterAuftragMitPositionenByKundenId(kundenId: string)
  */
 export async function getLetzterArtikelFromAuftragByKundenId(kundenId: string): Promise<string[]> {
   const auftrag = await Auftrag.find({ kunde: kundenId })
-    .sort({ lieferdatum: -1, createdAt: -1 }) // neuester Auftrag zuerst
+    .sort({ createdAt: -1 }) // neuester Auftrag zuerst
     .limit(1);
 
   if (!auftrag || auftrag.length === 0) {
