@@ -1,4 +1,4 @@
-import { Schema, model} from "mongoose";
+import { Schema, Types, model} from "mongoose";
 
 export interface IKunde{
     name: string; // Name des Kunden
@@ -9,6 +9,7 @@ export interface IKunde{
     telefon: string; // Telefonnummer des Kunden
     createdAt: Date; // Erstellungsdatum
     updatedAt: Date; // Aktualisierungsdatum
+    favoriten?: Types.ObjectId[];
 }
 
 const kundeSchema = new Schema<IKunde>({
@@ -18,6 +19,7 @@ const kundeSchema = new Schema<IKunde>({
     email: { type: String, required: true, unique: true },
     adresse: { type: String, required: true },
     telefon: { type: String, required: false },
+    favoriten: [{ type: Schema.Types.ObjectId, ref: "Artikel" }],
   },
   { timestamps: true }
 )

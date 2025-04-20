@@ -176,3 +176,56 @@ export async function loginKunde(
 export async function logoutKunde(): Promise<string> {
   return 'Logout erfolgreich';
 }
+
+export async function getKundenFavoriten(
+  kundenId: string,
+  currentUser: LoginResource
+): Promise<string[]> {
+  if (currentUser.role !== 'a' && currentUser.id !== kundenId) {
+    throw new Error('Zugriff verweigert');
+  }
+
+  const kunde = await Kunde.findById(kundenId);
+  if (!kunde) {
+    throw new Error('Kunde nicht gefunden');
+  }
+
+  return kunde.favoriten?.map(f => f.toString()) || [];
+}
+
+export async function addKundenFavorit(
+  kundenId: string,
+  artikelId: string,
+  currentUser: LoginResource
+): Promise<void> {
+  if (currentUser.role !== 'a' && currentUser.id !== kundenId) {
+    throw new Error('Zugriff verweigert');
+  }
+
+  const kunde = await Kunde.findById(kundenId);
+  if (!kunde) throw new Error('Kunde nicht gefunden');
+
+  if (!kunde.favoriten) kunde.favoriten = [];
+  if (!kunde.favoriten.includes(artikelId as any)) {
+    kunde.favoriten.push(artikelId as any);
+    await kunde.save();
+  }
+}
+
+export async function removeKundenFavorit(
+  kundenId: string,
+  artikelId: string,
+  currentUser: LoginResource
+): Promise<void> {
+  if (currentUser.role !== 'a' && currentUser.id !== kundenId) {
+    throw new Error('Zugriff verweigert');
+  }
+
+  const kunde = await Kunde.findById(kundenId);
+  if (!kunde) throw new Error('Kunde nicht gefunden');
+
+  if (kunde.favoriten) {
+    kunde.favoriten = kunde.favoriten.filter(f => f.toString() !== artikelId);
+    await kunde.save();
+  }
+}

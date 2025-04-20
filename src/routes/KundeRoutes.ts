@@ -9,6 +9,9 @@ import {
   deleteKunde,
   loginKunde,
   logoutKunde,
+  getKundenFavoriten,
+  addKundenFavorit,
+  removeKundenFavorit,
 } from '../services/KundeService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -162,6 +165,63 @@ kundeRouter.delete(
       const currentUser = req.user as LoginResource;
       await deleteKunde(req.params.id, currentUser);
       res.json({ message: 'Kunde gelöscht' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// 💚 GET /kunden/:id/favoriten – Holt alle Favoriten eines Kunden
+kundeRouter.get(
+  '/:id/favoriten',
+  authenticate,
+  [param('id').isMongoId().withMessage('Ungültige ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user!;
+      const favoriten = await getKundenFavoriten(req.params.id, currentUser);
+      res.json(favoriten);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// ➕ POST /kunden/:id/favoriten – Artikel als Favorit hinzufügen
+kundeRouter.post(
+  '/:id/favoriten',
+  authenticate,
+  [
+    param('id').isMongoId().withMessage('Ungültige Kunden-ID'),
+    body('artikelId').isMongoId().withMessage('Ungültige Artikel-ID'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user!;
+      await addKundenFavorit(req.params.id, req.body.artikelId, currentUser);
+      res.json({ message: 'Artikel hinzugefügt' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// ❌ DELETE /kunden/:id/favoriten/:artikelId – Favorit entfernen
+kundeRouter.delete(
+  '/:id/favoriten/:artikelId',
+  authenticate,
+  [
+    param('id').isMongoId().withMessage('Ungültige Kunden-ID'),
+    param('artikelId').isMongoId().withMessage('Ungültige Artikel-ID'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user!;
+      await removeKundenFavorit(req.params.id, req.params.artikelId, currentUser);
+      res.json({ message: 'Artikel entfernt' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
