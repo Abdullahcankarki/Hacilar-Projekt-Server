@@ -22,7 +22,7 @@ export async function createArtikelPosition(data: {
   artikel: string;
   menge: number;
   einheit: 'kg' | 'stück' | 'kiste' | 'karton';
-  auftragId: string;
+  auftragId?: string; // Optional
   zerlegung?: boolean;
   vakuum?: boolean;
   bemerkung?: string;
@@ -37,18 +37,20 @@ export async function createArtikelPosition(data: {
     throw new Error('Artikel nicht gefunden.');
   }
 
-  // Auftrag laden
-  const auftrag = await Auftrag.findById(data.auftragId);
-  if (!auftrag) {
-    throw new Error('Auftrag nicht gefunden.');
-  }
-
-  // Kundenpreis suchen (falls vorhanden)
   let aufpreis = 0;
-  if (auftrag.kunde) {
-    const kundenPreis = await KundenPreisModel.findOne({ artikel: data.artikel, customer: auftrag.kunde });
-    if (kundenPreis) {
-      aufpreis = kundenPreis.aufpreis;
+
+  // Nur wenn Auftrag-ID existiert:
+  if (data.auftragId) {
+    const auftrag = await Auftrag.findById(data.auftragId);
+    if (!auftrag) {
+      throw new Error('Auftrag nicht gefunden.');
+    }
+
+    if (auftrag.kunde) {
+      const kundenPreis = await KundenPreisModel.findOne({ artikel: data.artikel, customer: auftrag.kunde });
+      if (kundenPreis) {
+        aufpreis = kundenPreis.aufpreis;
+      }
     }
   }
 
@@ -90,12 +92,17 @@ export async function createArtikelPosition(data: {
 
   const savedPosition = await newPosition.save();
 
-  // Artikelposition-ID zum Auftrag hinzufügen
-  if (!auftrag.artikelPosition) {
-    auftrag.artikelPosition = [];
+  // Artikelposition-ID zum Auftrag hinzufügen, wenn Auftrag angegeben wurde
+  if (data.auftragId) {
+    const auftrag = await Auftrag.findById(data.auftragId);
+    if (auftrag) {
+      if (!auftrag.artikelPosition) {
+        auftrag.artikelPosition = [];
+      }
+      auftrag.artikelPosition.push(savedPosition._id);
+      await auftrag.save();
+    }
   }
-  auftrag.artikelPosition.push(savedPosition._id);
-  await auftrag.save();
 
   return {
     id: savedPosition._id.toString(),
@@ -223,7 +230,7 @@ export async function updateArtikelPosition(
 
   // Neu berechnen
   position.gesamtpreis = position.einzelpreis * position.menge;
-  
+
   // Optional auch Gewicht neu berechnen je nach Einheit?
   // (Kann ich ergänzen wenn du willst!)
 
