@@ -210,3 +210,22 @@ export async function deleteAuftrag(id: string): Promise<void> {
     throw new Error('Auftrag nicht gefunden');
   }
 }
+
+/**
+ * Löscht alle Aufträge und die dazugehörigen ArtikelPositionen.
+ */
+export async function deleteAllAuftraege(): Promise<void> {
+  // Alle Aufträge laden
+  const auftraege = await Auftrag.find();
+
+  // Sammle alle ArtikelPosition-IDs
+  const alleArtikelPositionen = auftraege.flatMap(auftrag => auftrag.artikelPosition);
+
+  // Lösche alle ArtikelPositionen
+  if (alleArtikelPositionen.length > 0) {
+    await ArtikelPosition.deleteMany({ _id: { $in: alleArtikelPositionen } });
+  }
+
+  // Lösche alle Aufträge
+  await Auftrag.deleteMany({});
+}

@@ -10,6 +10,7 @@ import {
   getAuftraegeByCustomerId,
   getLetzterAuftragMitPositionenByKundenId,
   getLetzterArtikelFromAuftragByKundenId,
+  deleteAllAuftraege,
 } from '../services/AuftragService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -283,6 +284,24 @@ auftragRouter.put(
   }
 );
 
+auftragRouter.delete(
+  '/all',
+  authenticate,
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+
+      if (req.user?.role !== 'a') {
+        return res.status(403).json({ error: 'Zugriff verweigert' });
+      }
+      await deleteAllAuftraege();
+      res.json({ message: 'Auftrag gelöscht' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 /**
  * DELETE /auftraege/:id
  * Löscht einen Auftrag.
@@ -307,5 +326,7 @@ auftragRouter.delete(
     }
   }
 );
+
+
 
 export default auftragRouter;

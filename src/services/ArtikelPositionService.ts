@@ -19,34 +19,41 @@ const EMPTY_ARTIKEL = {
  */
 
 export async function createArtikelPosition(data: {
-  artikel?: string;
+  artikel: string;
   menge: number;
   einheit: 'kg' | 'stück' | 'kiste' | 'karton';
-  einzelpreis?: number;
+  auftragId: string;
   zerlegung?: boolean;
   vakuum?: boolean;
   bemerkung?: string;
 }): Promise<ArtikelPositionResource> {
-  // Validierung Menge & Einheit
-  if (!data.einheit || !['kg', 'stück', 'kiste', 'karton'].includes(data.einheit)) {
-    throw new Error('Einheit ist ungültig');
-  }
-  let menge = 0;
-  if (typeof data.menge === 'number' && !isNaN(data.menge) && data.menge > 0) {
-    menge = data.menge;
-  } else {
-    console.warn('Ungültige oder fehlende Menge, setze auf 0');
+  if (!data.artikel || !data.menge || !data.einheit) {
+    throw new Error('Fehlende Felder bei der Artikelposition.');
   }
 
-  // Artikel laden (optional)
-  const artikelFromDb = data.artikel
-    ? await ArtikelModel.findById(data.artikel).catch((err) => {
-        console.error('Fehler beim Laden des Artikels:', err);
-        return null;
-      })
-    : null;
+  // Artikel laden
+  const artikel = await ArtikelModel.findById(data.artikel);
+  if (!artikel) {
+    throw new Error('Artikel nicht gefunden.');
+  }
 
-  const artikel = artikelFromDb || EMPTY_ARTIKEL;
+  // Auftrag laden
+  const auftrag = await Auftrag.findById(data.auftragId);
+  if (!auftrag) {
+    throw new Error('Auftrag nicht gefunden.');
+  }
+
+  // Kundenpreis suchen (falls vorhanden)
+  let aufpreis = 0;
+  if (auftrag.kunde) {
+    const kundenPreis = await KundenPreisModel.findOne({ artikel: data.artikel, customer: auftrag.kunde });
+    if (kundenPreis) {
+      aufpreis = kundenPreis.aufpreis;
+    }
+  }
+
+  const basispreis = artikel.preis || 0;
+  const einzelpreis = basispreis + aufpreis;
 
   // Gewicht berechnen
   let gesamtgewicht = 0;
@@ -65,63 +72,43 @@ export async function createArtikelPosition(data: {
       break;
   }
 
+  const gesamtpreis = einzelpreis * gesamtgewicht;
+
+  // Artikelposition erstellen
   const newPosition = new ArtikelPosition({
-    artikel: data.artikel || undefined,
-    artikelName: artikel.name ?? 'Unbekannt',
+    artikel: artikel._id,
+    artikelName: artikel.name,
     menge: data.menge,
     einheit: data.einheit,
     zerlegung: data.zerlegung ?? false,
     vakuum: data.vakuum ?? false,
     bemerkung: data.bemerkung?.trim() || '',
-    einzelpreis: 0, // wird überschrieben
+    einzelpreis,
     gesamtgewicht,
-    gesamtpreis: 0, // wird gleich gesetzt
+    gesamtpreis,
   });
 
-  const saved = await newPosition.save();
+  const savedPosition = await newPosition.save();
 
-  // Kunden-ID über Auftrag finden
-  const auftrag = await Auftrag.findOne({ artikelPosition: saved._id });
-  if (!auftrag) {
-    console.warn('Kein Auftrag gefunden, der diese Artikelposition enthält.');
+  // Artikelposition-ID zum Auftrag hinzufügen
+  if (!auftrag.artikelPosition) {
+    auftrag.artikelPosition = [];
   }
-
-  const kundeId = auftrag?.kunde?.toString();
-  let einzelpreis = 0;
-
-  if (data.artikel && kundeId) {
-    const kundenPreis = await KundenPreisModel.findOne({
-      artikel: data.artikel,
-      customer: kundeId,
-    }).catch((err) => {
-      console.warn('Kundenpreis konnte nicht geladen werden:', err);
-      return null;
-    });
-
-    const artikelBasisPreis = typeof artikel.preis === 'number' ? artikel.preis : 0;
-    const aufpreis = kundenPreis?.aufpreis ?? 0;
-    einzelpreis = artikelBasisPreis + aufpreis;
-  }
-
-  const gesamtpreis = einzelpreis * data.menge;
-
-  // Artikelposition aktualisieren mit Preisen
-  saved.einzelpreis = einzelpreis;
-  saved.gesamtpreis = gesamtpreis;
-  await saved.save();
+  auftrag.artikelPosition.push(savedPosition._id);
+  await auftrag.save();
 
   return {
-    id: saved._id.toString(),
-    artikel: saved.artikel?.toString() || '',
-    artikelName: saved.artikelName,
-    menge: saved.menge,
-    einheit: saved.einheit,
-    einzelpreis: saved.einzelpreis,
-    zerlegung: saved.zerlegung,
-    vakuum: saved.vakuum,
-    bemerkung: saved.bemerkung,
-    gesamtgewicht: saved.gesamtgewicht,
-    gesamtpreis: saved.gesamtpreis,
+    id: savedPosition._id.toString(),
+    artikel: savedPosition.artikel.toString(),
+    artikelName: savedPosition.artikelName,
+    menge: savedPosition.menge,
+    einheit: savedPosition.einheit,
+    einzelpreis: savedPosition.einzelpreis,
+    zerlegung: savedPosition.zerlegung,
+    vakuum: savedPosition.vakuum,
+    bemerkung: savedPosition.bemerkung,
+    gesamtgewicht: savedPosition.gesamtgewicht,
+    gesamtpreis: savedPosition.gesamtpreis,
   };
 }
 
@@ -133,18 +120,27 @@ export async function getArtikelPositionById(id: string): Promise<ArtikelPositio
   if (!position) {
     throw new Error('Artikelposition nicht gefunden');
   }
+
+  let artikelPreis = 0;
+  const artikel = await ArtikelModel.findById(position.artikel);
+  if (artikel && typeof artikel.preis === 'number') {
+    artikelPreis = artikel.preis;
+  }
+
+  const gesamtpreis = (position.gesamtgewicht ?? 0) * artikelPreis; // ✨ NEU: Gewicht × Preis
+
   return {
     id: position._id.toString(),
     artikel: position.artikel.toString(),
-    artikelName: position.artikelName, // ✅ NEU
+    artikelName: position.artikelName,
     menge: position.menge,
     einheit: position.einheit,
-    einzelpreis: position.einzelpreis,
+    einzelpreis: artikelPreis,
     zerlegung: position.zerlegung,
     vakuum: position.vakuum,
     bemerkung: position.bemerkung,
     gesamtgewicht: position.gesamtgewicht,
-    gesamtpreis: position.gesamtpreis,
+    gesamtpreis: gesamtpreis, // ✨ NEU
   };
 }
 
@@ -153,24 +149,41 @@ export async function getArtikelPositionById(id: string): Promise<ArtikelPositio
  */
 export async function getAllArtikelPositionen(): Promise<ArtikelPositionResource[]> {
   const positions = await ArtikelPosition.find();
-  return positions.map(pos => ({
-    id: pos._id.toString(),
-    artikel: pos.artikel.toString(),
-    artikelName: pos.artikelName, // ✅ NEU
-    menge: pos.menge,
-    einheit: pos.einheit,
-    einzelpreis: pos.einzelpreis,
-    zerlegung: pos.zerlegung,
-    vakuum: pos.vakuum,
-    bemerkung: pos.bemerkung,
-    gesamtgewicht: pos.gesamtgewicht,
-    gesamtpreis: pos.gesamtpreis,
-  }));
+
+  const result: ArtikelPositionResource[] = [];
+
+  for (const pos of positions) {
+    let artikelPreis = 0;
+    const artikel = await ArtikelModel.findById(pos.artikel);
+    if (artikel && typeof artikel.preis === 'number') {
+      artikelPreis = artikel.preis;
+    }
+
+    const gesamtpreis = (pos.gesamtgewicht ?? 0) * artikelPreis; // ✨ NEU: Gewicht × Preis
+
+    result.push({
+      id: pos._id.toString(),
+      artikel: pos.artikel.toString(),
+      artikelName: pos.artikelName,
+      menge: pos.menge,
+      einheit: pos.einheit,
+      einzelpreis: artikelPreis,
+      zerlegung: pos.zerlegung,
+      vakuum: pos.vakuum,
+      bemerkung: pos.bemerkung,
+      gesamtgewicht: pos.gesamtgewicht,
+      gesamtpreis: gesamtpreis, // ✨ NEU
+    });
+  }
+
+  return result;
 }
 
 /**
  * Aktualisiert eine Artikelposition.
  */
+import mongoose from 'mongoose';
+
 export async function updateArtikelPosition(
   id: string,
   data: Partial<{
@@ -182,14 +195,44 @@ export async function updateArtikelPosition(
     bemerkung: string;
   }>
 ): Promise<ArtikelPositionResource> {
-  const updated = await ArtikelPosition.findByIdAndUpdate(id, data, { new: true });
-  if (!updated) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new Error('Ungültige Artikelpositions-ID');
+  }
+
+  const position = await ArtikelPosition.findById(id);
+  if (!position) {
     throw new Error('Artikelposition nicht gefunden');
   }
+
+  // Falls Artikel geändert wird, neuen Artikel laden
+  if (data.artikel && data.artikel !== position.artikel.toString()) {
+    const neuerArtikel = await ArtikelModel.findById(data.artikel);
+    if (!neuerArtikel) {
+      throw new Error('Neuer Artikel nicht gefunden');
+    }
+    position.artikel = neuerArtikel._id;
+    position.artikelName = neuerArtikel.name;
+  }
+
+  // Andere Felder aktualisieren
+  if (data.menge !== undefined) position.menge = data.menge;
+  if (data.einheit) position.einheit = data.einheit;
+  if (data.zerlegung !== undefined) position.zerlegung = data.zerlegung;
+  if (data.vakuum !== undefined) position.vakuum = data.vakuum;
+  if (data.bemerkung !== undefined) position.bemerkung = data.bemerkung.trim();
+
+  // Neu berechnen
+  position.gesamtpreis = position.einzelpreis * position.menge;
+  
+  // Optional auch Gewicht neu berechnen je nach Einheit?
+  // (Kann ich ergänzen wenn du willst!)
+
+  const updated = await position.save();
+
   return {
     id: updated._id.toString(),
     artikel: updated.artikel.toString(),
-    artikelName: updated.artikelName, // ✅ NEU
+    artikelName: updated.artikelName,
     menge: updated.menge,
     einheit: updated.einheit,
     einzelpreis: updated.einzelpreis,
