@@ -7,6 +7,7 @@ import {
   getKundenPreisById,
   updateKundenPreis,
   deleteKundenPreis,
+  getKundenPreisByArtikelId,
 } from '../services/KundenPreisService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -100,6 +101,25 @@ kundenPreisRouter.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const result = await getAllKundenPreise();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /kundenpreise/artikel/:artikelId
+// Gibt alle Kundenpreise zu einer bestimmten Artikel-ID zurück (nur Admins)
+kundenPreisRouter.get(
+  '/artikel/:artikelId',
+  authenticate,
+  isAdmin,
+  [param('artikelId').isMongoId().withMessage('Ungültige Artikel-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const artikelId = req.params.artikelId;
+      const result = await getKundenPreisByArtikelId(artikelId);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

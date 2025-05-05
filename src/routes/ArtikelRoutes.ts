@@ -105,11 +105,13 @@ artikelRouter.post(
 /**
  * GET /artikel
  * Ruft alle Artikel ab.
- * Dieser Endpunkt ist öffentlich.
+ * Optional: Admins können `?kunde=...` übergeben.
  */
-artikelRouter.get('/', async (req: Request, res: Response) => {
+artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const result = await getAllArtikel();
+    const isAdminUser = req.user?.role === 'a';
+    const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
+    const result = await getAllArtikel(kundeId);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -119,14 +121,18 @@ artikelRouter.get('/', async (req: Request, res: Response) => {
 /**
  * GET /artikel/:id
  * Ruft einen einzelnen Artikel anhand der ID ab.
+ * Optional: Admins können `?kunde=...` übergeben.
  */
 artikelRouter.get(
   '/:id',
+  authenticate,
   [param('id').isMongoId().withMessage('Ungültige Artikel-ID')],
   validate,
-  async (req: Request, res: Response) => {
+  async (req: AuthRequest, res: Response) => {
     try {
-      const result = await getArtikelById(req.params.id);
+      const isAdminUser = req.user?.role === 'a';
+      const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
+      const result = await getArtikelById(req.params.id, kundeId);
       res.json(result);
     } catch (error: any) {
       res.status(404).json({ error: error.message });

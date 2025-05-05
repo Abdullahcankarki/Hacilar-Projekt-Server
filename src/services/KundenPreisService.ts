@@ -40,6 +40,37 @@ export async function getKundenPreisById(id: string): Promise<KundenPreisResourc
 }
 
 /**
+ * Ruft alle kundenspezifischen Preise für eine bestimmte Artikel-ID ab.
+ */
+export async function getKundenPreisByArtikelId(artikelId: string): Promise<KundenPreisResource[]> {
+  const entries = await KundenPreisModel.find({ artikel: artikelId });
+  return entries.map(entry => ({
+    id: entry._id.toString(),
+    artikel: entry.artikel.toString(),
+    customer: entry.customer.toString(),
+    aufpreis: entry.aufpreis,
+  }));
+}
+
+
+export async function getKundenPreis(
+  kundenId: string,
+  artikelId: string
+): Promise<KundenPreisResource> {
+  const entry = await KundenPreisModel.findOne({
+    customer: kundenId,
+    artikel: artikelId,
+  }).exec();
+
+  return {
+    id: entry?._id?.toString() ?? 'default',
+    artikel: artikelId,
+    customer: kundenId,
+    aufpreis: entry?.aufpreis ?? 0,
+  };
+}
+
+/**
  * Ruft alle kundenspezifischen Preise ab.
  */
 export async function getAllKundenPreise(): Promise<KundenPreisResource[]> {

@@ -1,5 +1,6 @@
 import { ArtikelModel } from '../model/ArtikelModel'; // Pfad ggf. anpassen
 import { ArtikelResource } from '../Resources';    // Pfad ggf. anpassen
+import { getKundenPreis } from './KundenPreisService';
 
 /**
  * Erstellt einen neuen Artikel.
@@ -38,14 +39,29 @@ export async function createArtikel(data: {
 /**
  * Ruft einen Artikel anhand der ID ab.
  */
-export async function getArtikelById(id: string): Promise<ArtikelResource> {
+export async function getArtikelById(
+  id: string,
+  customerId?: string
+): Promise<ArtikelResource> {
   const artikel = await ArtikelModel.findById(id);
   if (!artikel) {
     throw new Error('Artikel nicht gefunden');
   }
+
+  // Basispreis
+  let preis = artikel.preis;
+
+  // Kundenaufschlag abrufen, falls customerId vorhanden
+  if (customerId) {
+    const kundenPreis = await getKundenPreis(customerId, id);
+    if (kundenPreis) {
+      preis += kundenPreis.aufpreis;
+    }
+  }
+
   return {
     id: artikel._id.toString(),
-    preis: artikel.preis,
+    preis,
     artikelNummer: artikel.artikelNummer,
     name: artikel.name,
     kategorie: artikel.kategorie,
@@ -58,18 +74,32 @@ export async function getArtikelById(id: string): Promise<ArtikelResource> {
 /**
  * Ruft alle Artikel ab.
  */
-export async function getAllArtikel(): Promise<ArtikelResource[]> {
+export async function getAllArtikel(customerId?: string): Promise<ArtikelResource[]> {
   const artikelList = await ArtikelModel.find();
-  return artikelList.map(artikel => ({
-    id: artikel._id.toString(),
-    preis: artikel.preis,
-    artikelNummer: artikel.artikelNummer,
-    name: artikel.name,
-    kategorie: artikel.kategorie,
-    gewichtProStueck: artikel.gewichtProStueck,
-    gewichtProKarton: artikel.gewichtProKarton,
-    gewichtProKiste: artikel.gewichtProKiste,
-  }));
+
+  const result: ArtikelResource[] = [];
+
+  for (const artikel of artikelList) {
+    let preis = artikel.preis;
+
+    if (customerId) {
+      const kundenPreis = await getKundenPreis(customerId, artikel._id.toString());
+      preis += kundenPreis.aufpreis; // aufpreis ist garantiert immer eine Zahl
+    }
+
+    result.push({
+      id: artikel._id.toString(),
+      preis,
+      artikelNummer: artikel.artikelNummer,
+      name: artikel.name,
+      kategorie: artikel.kategorie,
+      gewichtProStueck: artikel.gewichtProStueck,
+      gewichtProKarton: artikel.gewichtProKarton,
+      gewichtProKiste: artikel.gewichtProKiste,
+    });
+  }
+
+  return result;
 }
 
 /**
