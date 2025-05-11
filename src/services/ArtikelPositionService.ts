@@ -3,6 +3,7 @@ import { ArtikelModel } from '../model/ArtikelModel'; // ✅ Hinzugefügt
 import { ArtikelPositionResource } from '../Resources';
 import { KundenPreisModel } from '../model/KundenPreisModel';
 import { Auftrag } from '../model/AuftragModel';
+import { getKundenPreis } from './KundenPreisService'; // Pfad ggf. anpassen
 
 // ... Importe bleiben gleich
 
@@ -47,10 +48,8 @@ export async function createArtikelPosition(data: {
     }
 
     if (auftrag.kunde) {
-      const kundenPreis = await KundenPreisModel.findOne({ artikel: data.artikel, customer: auftrag.kunde });
-      if (kundenPreis) {
-        aufpreis = kundenPreis.aufpreis;
-      }
+      const kundenPreis = await getKundenPreis(auftrag.kunde.toString(), data.artikel);
+      aufpreis = kundenPreis.aufpreis;
     }
   }
 
@@ -128,26 +127,18 @@ export async function getArtikelPositionById(id: string): Promise<ArtikelPositio
     throw new Error('Artikelposition nicht gefunden');
   }
 
-  let artikelPreis = 0;
-  const artikel = await ArtikelModel.findById(position.artikel);
-  if (artikel && typeof artikel.preis === 'number') {
-    artikelPreis = artikel.preis;
-  }
-
-  const gesamtpreis = (position.gesamtgewicht ?? 0) * artikelPreis; // ✨ NEU: Gewicht × Preis
-
   return {
     id: position._id.toString(),
     artikel: position.artikel.toString(),
     artikelName: position.artikelName,
     menge: position.menge,
     einheit: position.einheit,
-    einzelpreis: artikelPreis,
+    einzelpreis: position.einzelpreis,
     zerlegung: position.zerlegung,
     vakuum: position.vakuum,
     bemerkung: position.bemerkung,
     gesamtgewicht: position.gesamtgewicht,
-    gesamtpreis: gesamtpreis, // ✨ NEU
+    gesamtpreis: position.gesamtpreis,
   };
 }
 
@@ -160,26 +151,18 @@ export async function getAllArtikelPositionen(): Promise<ArtikelPositionResource
   const result: ArtikelPositionResource[] = [];
 
   for (const pos of positions) {
-    let artikelPreis = 0;
-    const artikel = await ArtikelModel.findById(pos.artikel);
-    if (artikel && typeof artikel.preis === 'number') {
-      artikelPreis = artikel.preis;
-    }
-
-    const gesamtpreis = (pos.gesamtgewicht ?? 0) * artikelPreis; // ✨ NEU: Gewicht × Preis
-
     result.push({
       id: pos._id.toString(),
       artikel: pos.artikel.toString(),
       artikelName: pos.artikelName,
       menge: pos.menge,
       einheit: pos.einheit,
-      einzelpreis: artikelPreis,
+      einzelpreis: pos.einzelpreis,
       zerlegung: pos.zerlegung,
       vakuum: pos.vakuum,
       bemerkung: pos.bemerkung,
       gesamtgewicht: pos.gesamtgewicht,
-      gesamtpreis: gesamtpreis, // ✨ NEU
+      gesamtpreis: pos.gesamtpreis,
     });
   }
 
@@ -228,11 +211,42 @@ export async function updateArtikelPosition(
   if (data.vakuum !== undefined) position.vakuum = data.vakuum;
   if (data.bemerkung !== undefined) position.bemerkung = data.bemerkung.trim();
 
-  // Neu berechnen
-  position.gesamtpreis = position.einzelpreis * position.menge;
+  // Optional: Gewicht neu berechnen, wenn menge oder einheit geändert wurden
+  if (data.menge !== undefined || data.einheit) {
+    const artikel = await ArtikelModel.findById(position.artikel);
+    if (artikel) {
+      let gesamtgewicht = 0;
+      switch (position.einheit) {
+        case 'kg':
+          gesamtgewicht = position.menge;
+          break;
+        case 'stück':
+          gesamtgewicht = (artikel.gewichtProStueck || 0) * position.menge;
+          break;
+        case 'kiste':
+          gesamtgewicht = (artikel.gewichtProKiste || 0) * position.menge;
+          break;
+        case 'karton':
+          gesamtgewicht = (artikel.gewichtProKarton || 0) * position.menge;
+          break;
+      }
+      position.gesamtgewicht = gesamtgewicht;
+    }
+  }
 
-  // Optional auch Gewicht neu berechnen je nach Einheit?
-  // (Kann ich ergänzen wenn du willst!)
+  // Einzelpreis mit getKundenPreis basierend auf Auftrag ermitteln
+  const auftrag = await Auftrag.findOne({ artikelPosition: id });
+  let aufpreis = 0;
+  if (auftrag && auftrag.kunde) {
+    const kundenPreis = await getKundenPreis(auftrag.kunde.toString(), position.artikel.toString());
+    aufpreis = kundenPreis.aufpreis;
+  }
+  const artikel = await ArtikelModel.findById(position.artikel);
+  const basispreis = artikel?.preis ?? 0;
+  position.einzelpreis = basispreis + aufpreis;
+
+  // Gesamtpreis neu berechnen
+  position.gesamtpreis = position.einzelpreis * (position.gesamtgewicht ?? 0);
 
   const updated = await position.save();
 

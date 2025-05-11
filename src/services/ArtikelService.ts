@@ -13,6 +13,7 @@ export async function createArtikel(data: {
   gewichtProStueck?: number;
   gewichtProKarton?: number;
   gewichtProKiste?: number;
+  bildUrl?: string;
 }): Promise<ArtikelResource> {
   const newArtikel = new ArtikelModel({
     preis: data.preis,
@@ -22,6 +23,7 @@ export async function createArtikel(data: {
     gewichtProStueck: data.gewichtProStueck,
     gewichtProKarton: data.gewichtProKarton,
     gewichtProKiste: data.gewichtProKiste,
+    bildUrl: data.bildUrl,
   });
   const saved = await newArtikel.save();
   return {
@@ -33,6 +35,7 @@ export async function createArtikel(data: {
     gewichtProStueck: saved.gewichtProStueck,
     gewichtProKarton: saved.gewichtProKarton,
     gewichtProKiste: saved.gewichtProKiste,
+    bildUrl: saved.bildUrl,
   };
 }
 
@@ -68,6 +71,7 @@ export async function getArtikelById(
     gewichtProStueck: artikel.gewichtProStueck,
     gewichtProKarton: artikel.gewichtProKarton,
     gewichtProKiste: artikel.gewichtProKiste,
+    bildUrl: artikel.bildUrl,
   };
 }
 
@@ -96,6 +100,7 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
       gewichtProStueck: artikel.gewichtProStueck,
       gewichtProKarton: artikel.gewichtProKarton,
       gewichtProKiste: artikel.gewichtProKiste,
+      bildUrl: artikel.bildUrl,
     });
   }
 
@@ -115,6 +120,7 @@ export async function updateArtikel(
     gewichtProStueck: number;
     gewichtProKarton: number;
     gewichtProKiste: number;
+    bildUrl?: string;
   }>
 ): Promise<ArtikelResource> {
   const updated = await ArtikelModel.findByIdAndUpdate(id, data, { new: true });
@@ -130,6 +136,7 @@ export async function updateArtikel(
     gewichtProStueck: updated.gewichtProStueck,
     gewichtProKarton: updated.gewichtProKarton,
     gewichtProKiste: updated.gewichtProKiste,
+    bildUrl: updated.bildUrl,
   };
 }
 

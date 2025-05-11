@@ -8,6 +8,7 @@ export interface IArtikel extends Document {
   gewichtProStueck: number; // Gewicht pro Stück
   gewichtProKarton: number;  // Gewicht pro Karton
   gewichtProKiste: number;   // Gewicht pro Kiste
+  bildUrl?: string;
 }
 
 const ArtikelSchema = new Schema<IArtikel>({
@@ -18,6 +19,7 @@ const ArtikelSchema = new Schema<IArtikel>({
   gewichtProStueck: { type: Number},
   gewichtProKarton: { type: Number},
   gewichtProKiste: { type: Number},
+  bildUrl: { type: String },
 });
 
 export const ArtikelModel = model<IArtikel>('Artikel', ArtikelSchema);

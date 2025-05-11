@@ -46,6 +46,7 @@ export type ArtikelPositionResource = {
 
 export type ArtikelResource = {
     id?: string;             // Eindeutige ID des Artikels
+    bildUrl?: string;
     preis: number;           // Standardpreis des Artikels
     artikelNummer: string;   // Artikelnummer
     name: string;   // Artikelnummer
