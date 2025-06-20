@@ -117,7 +117,7 @@ artikelPositionRouter.get(
   }
 );
 
-artikelPositionRouter.get("/asad", async (req: AuthRequest, res: Response) => {
+artikelPositionRouter.get("/asad", authenticate, async (req: AuthRequest, res: Response) => {
   const start = Date.now();
   const isAdminUser = req.user?.role === "a";
   const kundeId = isAdminUser
