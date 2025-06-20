@@ -113,6 +113,60 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
 }
 
 /**
+ * Ruft einen Artikel ohne Aufpreis berechnung anhand der ID ab.
+ */
+
+export async function getArtikelByIdClean(
+  id: string,
+  customerId?: string
+): Promise<ArtikelResource> {
+  const artikel = await ArtikelModel.findById(id);
+  if (!artikel) {
+    throw new Error('Artikel nicht gefunden');
+  }
+
+  return {
+    id: artikel._id.toString(),
+    preis: artikel.preis,
+    artikelNummer: artikel.artikelNummer,
+    name: artikel.name,
+    kategorie: artikel.kategorie,
+    gewichtProStueck: artikel.gewichtProStueck,
+    gewichtProKarton: artikel.gewichtProKarton,
+    gewichtProKiste: artikel.gewichtProKiste,
+    bildUrl: artikel.bildUrl,
+    ausverkauft: artikel.ausverkauft,
+  };
+}
+
+/**
+ * Ruft alle Artikel ab.
+ */
+export async function getAllArtikelClean(): Promise<ArtikelResource[]> {
+  const artikelList = await ArtikelModel.find();
+
+  const result: ArtikelResource[] = [];
+
+  for (const artikel of artikelList) {
+
+    result.push({
+      id: artikel._id.toString(),
+      preis: artikel.preis,
+      artikelNummer: artikel.artikelNummer,
+      name: artikel.name,
+      kategorie: artikel.kategorie,
+      gewichtProStueck: artikel.gewichtProStueck,
+      gewichtProKarton: artikel.gewichtProKarton,
+      gewichtProKiste: artikel.gewichtProKiste,
+      bildUrl: artikel.bildUrl,
+      ausverkauft: artikel.ausverkauft,
+    });
+  }
+
+  return result;
+}
+
+/**
  * Ruft Artikel anhand einer Liste von Namen ab.
  */
 export async function getArtikelByNames(names: string[], customerId?: string): Promise<ArtikelResource[]> {

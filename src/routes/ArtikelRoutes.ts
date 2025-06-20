@@ -8,6 +8,8 @@ import {
   updateArtikel,
   deleteArtikel,
   getArtikelByNames,
+  getAllArtikelClean,
+  getArtikelByIdClean,
 } from '../services/ArtikelService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -205,6 +207,38 @@ artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => 
     res.status(500).json({ error: error.message });
   }
 });
+
+/**
+ * GET /artikel/clean
+ * Ruft alle Artikel ab.
+ */
+artikelRouter.get('/clean', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await getAllArtikelClean();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /artikel/clean/:id
+ * Ruft einen einzelnen Artikel anhand der ID ab.
+ */
+artikelRouter.get(
+  '/clean/:id',
+  authenticate,
+  [param('id').isMongoId().withMessage('Ungültige Artikel-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await getArtikelByIdClean(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+);
 
 /**
  * GET /artikel/:id
