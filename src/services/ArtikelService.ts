@@ -1,6 +1,8 @@
+import { KundenPreisModel } from '../model/KundenPreisModel';
 import { ArtikelModel } from '../model/ArtikelModel'; // Pfad ggf. anpassen
 import { ArtikelResource } from '../Resources';    // Pfad ggf. anpassen
 import { getKundenPreis } from './KundenPreisService';
+import { Types } from 'mongoose';
 
 /**
  * Erstellt einen neuen Artikel.
@@ -83,21 +85,14 @@ export async function getArtikelById(
  * Ruft alle Artikel ab.
  */
 export async function getAllArtikel(customerId?: string): Promise<ArtikelResource[]> {
+  // 1. Alle Artikel laden
   const artikelList = await ArtikelModel.find();
 
-  const result: ArtikelResource[] = [];
-
-  for (const artikel of artikelList) {
-    let preis = artikel.preis;
-
-    if (customerId) {
-      const kundenPreis = await getKundenPreis(customerId, artikel._id.toString());
-      preis += kundenPreis.aufpreis; // aufpreis ist garantiert immer eine Zahl
-    }
-
-    result.push({
+  // 2. Wenn kein Kunde angegeben ist, einfach Artikel ohne Aufpreis zurückgeben
+  if (!customerId) {
+    return artikelList.map(artikel => ({
       id: artikel._id.toString(),
-      preis,
+      preis: artikel.preis,
       artikelNummer: artikel.artikelNummer,
       name: artikel.name,
       kategorie: artikel.kategorie,
@@ -106,10 +101,33 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
-    });
+    }));
   }
 
-  return result;
+  // 3. Alle Kundenpreise für den Kunden in einem Schritt laden
+  const kundenPreise = await KundenPreisModel.find({ customer: new Types.ObjectId(customerId) });
+
+  // 4. Map zur schnellen Zuordnung: artikelId (als String) => aufpreis
+  const preisMap = new Map<string, number>(
+    kundenPreise.map(p => [p.artikel.toHexString(), p.aufpreis])
+  );
+
+  // 5. Artikel + Aufpreis kombinieren
+  return artikelList.map(artikel => {
+    const aufpreis = preisMap.get(artikel._id.toHexString()) || 0;
+    return {
+      id: artikel._id.toString(),
+      preis: artikel.preis + aufpreis,
+      artikelNummer: artikel.artikelNummer,
+      name: artikel.name,
+      kategorie: artikel.kategorie,
+      gewichtProStueck: artikel.gewichtProStueck,
+      gewichtProKarton: artikel.gewichtProKarton,
+      gewichtProKiste: artikel.gewichtProKiste,
+      bildUrl: artikel.bildUrl,
+      ausverkauft: artikel.ausverkauft,
+    };
+  });
 }
 
 /**
@@ -169,22 +187,18 @@ export async function getAllArtikelClean(): Promise<ArtikelResource[]> {
 /**
  * Ruft Artikel anhand einer Liste von Namen ab.
  */
-export async function getArtikelByNames(names: string[], customerId?: string): Promise<ArtikelResource[]> {
+export async function getArtikelByNames(
+  names: string[],
+  customerId?: string
+): Promise<ArtikelResource[]> {
+  // 1. Artikel anhand der Namen finden
   const artikelList = await ArtikelModel.find({ name: { $in: names } });
 
-  const result: ArtikelResource[] = [];
-
-  for (const artikel of artikelList) {
-    let preis = artikel.preis;
-
-    if (customerId) {
-      const kundenPreis = await getKundenPreis(customerId, artikel._id.toString());
-      preis += kundenPreis.aufpreis;
-    }
-
-    result.push({
+  // 2. Wenn kein Kunde angegeben ist, einfach Artikel ohne Aufpreis zurückgeben
+  if (!customerId) {
+    return artikelList.map(artikel => ({
       id: artikel._id.toString(),
-      preis,
+      preis: artikel.preis,
       artikelNummer: artikel.artikelNummer,
       name: artikel.name,
       kategorie: artikel.kategorie,
@@ -193,10 +207,36 @@ export async function getArtikelByNames(names: string[], customerId?: string): P
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
-    });
+    }));
   }
 
-  return result;
+  // 3. Alle Kundenpreise für diese Artikel laden
+  const kundenPreise = await KundenPreisModel.find({
+    customer: new Types.ObjectId(customerId),
+    artikel: { $in: artikelList.map(a => a._id) },
+  });
+
+  // 4. Map zur schnellen Zuordnung
+  const preisMap = new Map<string, number>(
+    kundenPreise.map(p => [p.artikel.toHexString(), p.aufpreis])
+  );
+
+  // 5. Ergebnis zusammenbauen
+  return artikelList.map(artikel => {
+    const aufpreis = preisMap.get(artikel._id.toHexString()) || 0;
+    return {
+      id: artikel._id.toString(),
+      preis: artikel.preis + aufpreis,
+      artikelNummer: artikel.artikelNummer,
+      name: artikel.name,
+      kategorie: artikel.kategorie,
+      gewichtProStueck: artikel.gewichtProStueck,
+      gewichtProKarton: artikel.gewichtProKarton,
+      gewichtProKiste: artikel.gewichtProKiste,
+      bildUrl: artikel.bildUrl,
+      ausverkauft: artikel.ausverkauft,
+    };
+  });
 }
 
 /**
