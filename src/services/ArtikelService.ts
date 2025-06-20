@@ -14,6 +14,7 @@ export async function createArtikel(data: {
   gewichtProKarton?: number;
   gewichtProKiste?: number;
   bildUrl?: string;
+  ausverkauft?: boolean
 }): Promise<ArtikelResource> {
   const newArtikel = new ArtikelModel({
     preis: data.preis,
@@ -24,6 +25,7 @@ export async function createArtikel(data: {
     gewichtProKarton: data.gewichtProKarton,
     gewichtProKiste: data.gewichtProKiste,
     bildUrl: data.bildUrl,
+    ausverkauft: data.ausverkauft,
   });
   const saved = await newArtikel.save();
   return {
@@ -36,6 +38,7 @@ export async function createArtikel(data: {
     gewichtProKarton: saved.gewichtProKarton,
     gewichtProKiste: saved.gewichtProKiste,
     bildUrl: saved.bildUrl,
+    ausverkauft: saved.ausverkauft,
   };
 }
 
@@ -72,6 +75,7 @@ export async function getArtikelById(
     gewichtProKarton: artikel.gewichtProKarton,
     gewichtProKiste: artikel.gewichtProKiste,
     bildUrl: artikel.bildUrl,
+    ausverkauft: artikel.ausverkauft,
   };
 }
 
@@ -101,6 +105,40 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
       gewichtProKarton: artikel.gewichtProKarton,
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
+      ausverkauft: artikel.ausverkauft,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Ruft Artikel anhand einer Liste von Namen ab.
+ */
+export async function getArtikelByNames(names: string[], customerId?: string): Promise<ArtikelResource[]> {
+  const artikelList = await ArtikelModel.find({ name: { $in: names } });
+
+  const result: ArtikelResource[] = [];
+
+  for (const artikel of artikelList) {
+    let preis = artikel.preis;
+
+    if (customerId) {
+      const kundenPreis = await getKundenPreis(customerId, artikel._id.toString());
+      preis += kundenPreis.aufpreis;
+    }
+
+    result.push({
+      id: artikel._id.toString(),
+      preis,
+      artikelNummer: artikel.artikelNummer,
+      name: artikel.name,
+      kategorie: artikel.kategorie,
+      gewichtProStueck: artikel.gewichtProStueck,
+      gewichtProKarton: artikel.gewichtProKarton,
+      gewichtProKiste: artikel.gewichtProKiste,
+      bildUrl: artikel.bildUrl,
+      ausverkauft: artikel.ausverkauft,
     });
   }
 
@@ -121,6 +159,7 @@ export async function updateArtikel(
     gewichtProKarton: number;
     gewichtProKiste: number;
     bildUrl?: string;
+    ausverkauft?: boolean;
   }>
 ): Promise<ArtikelResource> {
   const updated = await ArtikelModel.findByIdAndUpdate(id, data, { new: true });
@@ -137,6 +176,7 @@ export async function updateArtikel(
     gewichtProKarton: updated.gewichtProKarton,
     gewichtProKiste: updated.gewichtProKiste,
     bildUrl: updated.bildUrl,
+    ausverkauft: updated.ausverkauft
   };
 }
 

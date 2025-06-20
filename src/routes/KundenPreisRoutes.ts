@@ -8,6 +8,7 @@ import {
   updateKundenPreis,
   deleteKundenPreis,
   getKundenPreisByArtikelId,
+  setAufpreisForArtikelByFilter,
 } from '../services/KundenPreisService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -55,6 +56,42 @@ const validate = (req: Request, res: Response, next: NextFunction) => {
 /* -------------------------------
    Routen für Kundenpreis
 ---------------------------------*/
+
+kundenPreisRouter.post(
+  '/set-aufpreis',
+  authenticate,
+  isAdmin,
+  [
+    body('artikel')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('Artikel-ID ist erforderlich')
+      .isMongoId()
+      .withMessage('Ungültige Artikel-ID'),
+    body('aufpreis')
+      .isNumeric()
+      .withMessage('Aufpreis muss eine Zahl sein'),
+    body('kategorie')
+      .optional()
+      .isString()
+      .withMessage('Kategorie muss ein String sein'),
+    body('region')
+      .optional()
+      .isString()
+      .withMessage('Region muss ein String sein'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { artikel, aufpreis, kategorie, region } = req.body;
+      const result = await setAufpreisForArtikelByFilter(artikel, aufpreis, { kategorie, region });
+      res.status(200).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 // POST /kundenpreise
 // Erstellt einen neuen kundenspezifischen Preis (nur Admins)

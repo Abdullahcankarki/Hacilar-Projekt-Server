@@ -27,10 +27,12 @@ function convertAuftragToResource(
   totals: { totalWeight: number; totalPrice: number }
 ): AuftragResource {
   return {
-    id: auftrag._id.toString(),
-    kunde: auftrag.kunde.toString(),
-    kundeName: (auftrag as any).kunde?.name || '',  // Hier wird der Name des Kunden aus populate('kunde', 'name') genommen
-    artikelPosition: auftrag.artikelPosition.map(id => id.toString()),
+    id: auftrag._id?.toString() || '',
+    kunde: typeof auftrag.kunde === 'string' ? auftrag.kunde : auftrag.kunde?._id?.toString() || '',
+    kundeName: (auftrag as any).kunde?.name || '',
+    artikelPosition: Array.isArray(auftrag.artikelPosition)
+      ? auftrag.artikelPosition.map(id => id?.toString()).filter(Boolean)
+      : [],
     status: auftrag.status,
     lieferdatum: auftrag.lieferdatum ? auftrag.lieferdatum.toISOString() : undefined,
     bemerkungen: auftrag.bemerkungen,

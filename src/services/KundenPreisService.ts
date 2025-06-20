@@ -1,3 +1,4 @@
+import { Kunde } from '../model/KundeModel';
 import { KundenPreisModel } from '../model/KundenPreisModel'; // Pfad ggf. anpassen
 import { KundenPreisResource } from '../Resources';        // Pfad ggf. anpassen
 
@@ -110,4 +111,54 @@ export async function deleteKundenPreis(id: string): Promise<void> {
   if (!deleted) {
     throw new Error('KundenPreis nicht gefunden');
   }
+}
+
+/**
+ * Setzt einen Aufpreis für einen Artikel bei allen Kunden mit bestimmter Kategorie und/oder Region.
+ * Wenn Kategorie oder Region nicht angegeben sind, wird entsprechend breiter gefiltert.
+ */
+export async function setAufpreisForArtikelByFilter(
+  artikel: string,
+  aufpreis: number,
+  filter: { kategorie?: string; region?: string }
+): Promise<KundenPreisResource[]> {
+  const query: any = {};
+  if (filter.kategorie) query.kategorie = filter.kategorie;
+  if (filter.region) query.region = filter.region;
+
+  const kunden = await Kunde.find(query).select('_id');
+  const result: KundenPreisResource[] = [];
+
+  for (const kunde of kunden) {
+    const existing = await KundenPreisModel.findOne({
+      customer: kunde._id,
+      artikel: artikel,
+    });
+
+    if (existing) {
+      existing.aufpreis = Number(existing.aufpreis) + Number(aufpreis);
+      await existing.save();
+      result.push({
+        id: existing._id.toString(),
+        artikel: artikel,
+        customer: kunde._id.toString(),
+        aufpreis: existing.aufpreis,
+      });
+    } else {
+      const neu = new KundenPreisModel({
+        artikel: artikel,
+        customer: kunde._id,
+        aufpreis,
+      });
+      const saved = await neu.save();
+      result.push({
+        id: saved._id.toString(),
+        artikel: artikel,
+        customer: kunde._id.toString(),
+        aufpreis: saved.aufpreis,
+      });
+    }
+  }
+
+  return result;
 }

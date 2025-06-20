@@ -12,6 +12,7 @@ import {
   getKundenFavoriten,
   addKundenFavorit,
   removeKundenFavorit,
+  getUnapprovedKunden,
 } from '../services/KundeService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -58,11 +59,21 @@ kundeRouter.post(
   '/register',
   [
     body('name').isString().trim().notEmpty().withMessage('Name ist erforderlich'),
-    body('kundenNummer').isString().trim().notEmpty().withMessage('Kundennummer ist erforderlich'),
+    body('kundenNummer').optional().isString().trim().withMessage('Kundennummer ist erforderlich'),
     body('password').isString().trim().notEmpty().withMessage('Passwort ist erforderlich'),
     body('email').isEmail().withMessage('Ungültige Email'),
     body('adresse').isString().trim().notEmpty().withMessage('Adresse ist erforderlich'),
     body('telefon').optional().isString().trim(),
+    body('lieferzeit').optional().isString().trim().withMessage('lieferzeit ist erforderlich'),
+    body('ustId').optional().isString().trim(),
+    body('ansprechpartner').optional().isString().trim(),
+    body('region').optional().isString().trim().withMessage('Region ist erforderlich'),
+    body('kategorie').optional().isString().trim().withMessage('Kategorie ist erforderlich'),
+    body('handelsregisterNr').optional().isString().trim(),
+    body('website').optional().isString().trim(),
+    body('branchenInfo').optional().isString().trim(),
+    body('gewerbeDateiUrl').optional().isString().trim(),
+    body('zusatzDateiUrl').optional().isString().trim(),
   ],
   validate,
   async (req: Request, res: Response) => {
@@ -110,6 +121,22 @@ kundeRouter.get(
   }
 );
 
+// GET /kunden
+// Ruft alle Kunden ab – nur Admins (role === "a")
+kundeRouter.get(
+  '/unapproved',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user as LoginResource;
+      const result = await getUnapprovedKunden(currentUser);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 // GET /kunden/:id
 // Ruft einen einzelnen Kunden ab – Admin oder der Kunde selbst
 kundeRouter.get(
@@ -140,6 +167,17 @@ kundeRouter.put(
     body('email').optional().isEmail().withMessage('Ungültige Email'),
     body('adresse').optional().isString().trim().notEmpty(),
     body('telefon').optional().isString().trim(),
+    body('lieferzeit').optional().isString().trim(),
+    body('ustId').optional().isString().trim(),
+    body('handelsregisterNr').optional().isString().trim(),
+    body('ansprechpartner').optional().isString().trim(),
+    body('website').optional().isString().trim(),
+    body('branchenInfo').optional().isString().trim(),
+    body('region').optional().isString().trim(),
+    body('kategorie').optional().isString().trim(),
+    body('gewerbeDateiUrl').optional().isString().trim(),
+    body('zusatzDateiUrl').optional().isString().trim(),
+    body('isApproved').optional().isBoolean().trim(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {

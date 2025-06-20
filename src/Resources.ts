@@ -8,12 +8,23 @@ export type VerkaeuferResource = {
 export type KundeResource = {
     id?: string
     name: string
-    kundenNummer: string
+    kundenNummer?: string
     password?: string
     email?: string
     adresse?: string
     telefon?: string
     updatedAt?: string
+    lieferzeit?: string;
+    ustId?: string;
+    handelsregisterNr?: string;
+    ansprechpartner?: string;
+    website?: string;
+    branchenInfo?: string;
+    region?: string;
+    kategorie?: string;
+    isApproved: boolean;
+    gewerbeDateiUrl?: string;
+    zusatzDateiUrl?: string;
 }
 
 export type AuftragResource = {
@@ -54,6 +65,7 @@ export type ArtikelResource = {
     gewichtProStueck?: number;  // Gewicht pro Stück (optional, falls nicht immer angegeben)
     gewichtProKarton?: number;  // Gewicht pro Karton (optional)
     gewichtProKiste?: number;   // Gewicht pro Kiste (optional)
+    ausverkauft?: boolean
 };
 
 export type LoginResource = {

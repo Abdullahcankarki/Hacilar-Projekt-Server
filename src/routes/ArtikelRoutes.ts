@@ -7,6 +7,7 @@ import {
   getAllArtikel,
   updateArtikel,
   deleteArtikel,
+  getArtikelByNames,
 } from '../services/ArtikelService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -54,6 +55,93 @@ const validate = (req: Request, res: Response, next: NextFunction) => {
 /* -------------------------------
    Routen für Artikel
 ---------------------------------*/
+
+/**
+ * GET /artikel/auswahl
+ * Gibt eine vordefinierte Liste an Artikeln zurück.
+ */
+artikelRouter.get(
+  '/auswahl',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const isAdminUser = req.user?.role === 'a';
+      const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
+
+      const namen = [
+        "Hä.Brustfilet mit lange Haut",
+        "Hä.Brustfilet ohne Haut",
+        "Hä.Flügel Landgeflügel",
+        "Hä.Herz",
+        "Hä.Innenfilet",
+        "Hä.Keule m.Kn. Landgeflügel",
+        "Hähnchen Keule o.Kn. o.Haut",
+        "Hä.Leber",
+        "Hä.Magen",
+        "Hä.Unterkeule m.Kn.",
+        "Hähnchen Brustfilet mit Haut",
+        "Hähnchen ganz 1000gr. Landgeflügel",
+        "Hähnchen ganz 1200gr. Landgeflügel",
+        "Hähnchen ganz 1400gr. Bouwens",
+        "Kalb ganz m.Kn",
+        "Kalb Brust m.Kn. (V) I",
+        "Kalb Brust m.Kn. (V) II Rose",
+        "Kalb Brust o.Kn. (V) I Hell",
+        "Kalb Brust o.Kn. (V) II Rose",
+        "Kalb Fett",
+        "Kalb Keule m.Kn. Hell (V)",
+        "Kalb Kamm m.Kn. (V) Hell",
+        "Kalb Kamm o.Kn. (V) Hell",
+        "Kalb Bug m.Kn. (V) Hell",
+        "Kalb Bug o.Kn. (V) Hell",
+        "Kalb Kugel Rose NL",
+        "Kalb Kugel (V) Hell DE",
+        "Lamm ganz",
+        "Lamm Schulter & Lamm Hals m.Kn.",
+        "Lamm Keule m.Kn.",
+        "Lamm Vorderviertel",
+        "Lamm Netzfett",
+        "Lamm Schwanzfett",
+        "Lamm Füße",
+        "Lamm Leber",
+        "Lamm Köpfe",
+        "Lamm Köpfe gebrannt",
+        "Lamm Mumbar",
+        "Pu.Flügel o.Kn.",
+        "Pu.Oberkeule m.Kn. (männlich)",
+        "Pu.Oberkeule o.Kn. (männlich)",
+        "Pu.Oberkeule m.Kn. (weiblich)",
+        "Pu.Oberkeule o.Kn. (weiblich)",
+        "Pu.Medaillon gefr.",
+        "Pu.Oberkeule o.Kn. o.Haut",
+        "Bulle ganz m.Kn.",
+        "B.Lappen m.Kn.",
+        "B.Brust o.Kn.",
+        "B.Vorderviertel o.Kn. Bahlmann",
+        "B.Keule m.Kn.",
+        "B.Kamm o.Kn.",
+        "B.Bug m.Kn.",
+        "B.Bug o.Kn.",
+        "B.Kugel",
+        "B.Oberschale",
+        "B.Unterschale PAD",
+        "B.Entrecote",
+        "B.Beinfleisch",
+        "B.Abschnitte (90/10)",
+        "Mergez (Rinder Wurst)",
+        "B.Roastbeef m.Kn.",
+        "Rinder Pansen",
+        "Bullen Bacon",
+        "B.Fett"
+      ];
+
+      const result = await getArtikelByNames(namen, kundeId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 /**
  * POST /artikel
