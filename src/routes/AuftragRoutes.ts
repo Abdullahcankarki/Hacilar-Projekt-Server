@@ -30,8 +30,12 @@ const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
   }
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as LoginResource;
-    req.user = decoded;
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    req.user = {
+      id: decoded.id,
+      role: decoded.role,
+      exp: decoded.exp,
+    };
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Ungültiges Token' });
@@ -45,6 +49,42 @@ const validate = (req: Request, res: Response, next: NextFunction) => {
     return res.status(400).json({ errors: errors.array() });
   }
   next();
+};
+
+/* -------------------------------
+   Hilfsfunktion canViewAuftrag
+---------------------------------*/
+const canViewAuftrag = (user: LoginResource, auftrag: any): boolean => {
+  const heute = new Date();
+  const morgen = new Date();
+  morgen.setDate(heute.getDate() + 1);
+  const lieferdatum = new Date(auftrag.lieferdatum);
+
+  if (!user.role) {
+    return false;
+  }
+
+  if (
+    user.role.includes('admin') ||
+    user.role.includes('buchhaltung') ||
+    user.role.includes('statistik') ||
+    user.role.includes('support')
+  ) {
+    return true;
+  }
+  if (user.role.includes('kommissionierung')) {
+    return (
+      lieferdatum.toDateString() === heute.toDateString() ||
+      lieferdatum.toDateString() === morgen.toDateString()
+    );
+  }
+  if (user.role.includes('fahrer')) {
+    return lieferdatum.toDateString() === heute.toDateString();
+  }
+  if (user.role.includes('kunde')) {
+    return auftrag.kunde === user.id;
+  }
+  return false;
 };
 
 /* -------------------------------
@@ -83,7 +123,7 @@ auftragRouter.post(
   async (req: AuthRequest, res: Response) => {
     try {
       // Falls der User kein Admin ist, darf das angegebene Kunde-Feld nur die eigene ID enthalten
-      if (req.user?.role !== 'a' && req.body.kunde !== req.user?.id) {
+      if (!(req.user?.role.includes('admin')) && req.body.kunde !== req.user?.id) {
         return res.status(403).json({ error: 'Zugriff verweigert: Kunde stimmt nicht überein' });
       }
       const result = await createAuftrag(req.body);
@@ -104,7 +144,7 @@ auftragRouter.get(
   authenticate,
   async (req: AuthRequest, res: Response) => {
     try {
-      if (req.user?.role !== 'a') {
+      if (!(req.user?.role.includes('admin'))) {
         return res.status(403).json({ error: 'Nur Admins können alle Aufträge abrufen' });
       }
       const result = await getAllAuftraege();
@@ -130,7 +170,7 @@ auftragRouter.get(
       }
 
       // Admins brauchen Kunden-ID im Query-Parameter (z. B. ?kunde=xyz)
-      const kundenId = user.role === 'a'
+      const kundenId = user.role.includes('admin')
         ? req.query.kunde?.toString()
         : user.id;
 
@@ -165,7 +205,7 @@ auftragRouter.get(
       }
 
       // Admins brauchen Kunden-ID im Query-Parameter (z. B. ?kunde=xyz)
-      const kundenId = user.role === 'a'
+      const kundenId = user.role.includes('admin')
         ? req.query.kunde?.toString()
         : user.id;
 
@@ -199,7 +239,7 @@ auftragRouter.get(
     try {
       const result = await getAuftragById(req.params.id);
       // Falls der Nutzer kein Admin ist, muss der Auftrag dem eigenen Kunden zugeordnet sein.
-      if (req.user?.role !== 'a' && result.kunde !== req.user?.id) {
+      if (!canViewAuftrag(req.user!, result)) {
         return res.status(403).json({ error: 'Zugriff verweigert' });
       }
       res.json(result);
@@ -224,8 +264,14 @@ auftragRouter.get(
   async (req: AuthRequest, res: Response) => {
     try {
       // Zugriff nur auf eigene Aufträge, außer Admin
-      if (req.user?.role !== 'a' && req.params.id !== req.user?.id) {
-        return res.status(403).json({ error: 'Zugriff verweigert: Kunde stimmt nicht überein' });
+      if (
+        !(req.user?.role.includes('admin')) &&
+        !(req.user?.role.includes('buchhaltung')) &&
+        !(req.user?.role.includes('statistik')) &&
+        !(req.user?.role.includes('support')) &&
+        req.params.id !== req.user?.id
+      ) {
+        return res.status(403).json({ error: 'Zugriff verweigert' });
       }
 
       const result = await getAuftraegeByCustomerId(req.params.id);
@@ -271,8 +317,14 @@ auftragRouter.put(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
+      if (
+        !(req.user?.role.includes('admin')) &&
+        !(req.user?.role.includes('kommissionierung'))
+      ) {
+        return res.status(403).json({ error: 'Nur Admin oder Kommissionierer dürfen Aufträge bearbeiten' });
+      }
       // Falls "kunde" im Body gesetzt wird und der User kein Admin ist, muss dieser Wert mit der eigenen ID übereinstimmen.
-      if (req.user?.role !== 'a' && req.body.kunde && req.body.kunde !== req.user?.id) {
+      if (!(req.user?.role.includes('admin')) && req.body.kunde && req.body.kunde !== req.user?.id) {
         return res.status(403).json({ error: 'Zugriff verweigert: Kunde stimmt nicht überein' });
       }
       const result = await updateAuftrag(req.params.id, req.body);
@@ -291,7 +343,7 @@ auftragRouter.delete(
   async (req: AuthRequest, res: Response) => {
     try {
 
-      if (req.user?.role !== 'a') {
+      if (!(req.user?.role.includes('admin'))) {
         return res.status(403).json({ error: 'Zugriff verweigert' });
       }
       await deleteAllAuftraege();
@@ -316,8 +368,8 @@ auftragRouter.delete(
     try {
       // Zunächst den Auftrag abrufen, um zu prüfen, ob er dem Nutzer gehört
       const order = await getAuftragById(req.params.id);
-      if (req.user?.role !== 'a' && order.kunde !== req.user?.id) {
-        return res.status(403).json({ error: 'Zugriff verweigert' });
+      if (!(req.user?.role.includes('admin'))) {
+        return res.status(403).json({ error: 'Nur Admin darf Aufträge löschen' });
       }
       await deleteAuftrag(req.params.id);
       res.json({ message: 'Auftrag gelöscht' });

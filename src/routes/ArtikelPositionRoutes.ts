@@ -10,7 +10,9 @@ import {
 } from "../services/ArtikelPositionService"; // Pfad ggf. anpassen
 import { LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import { ArtikelPosition } from "../model/ArtikelPositionModel";
-import { getAllArtikel, getAllArtikelClean } from "../services/ArtikelService";
+import { getAllArtikel, getAllArtikelClean, getArtikelByIdClean } from "../services/ArtikelService";
+import { getKundenPreisByArtikelId } from "../services/KundenPreisService";
+import { getAllKunden } from "../services/KundeService";
 
 const artikelPositionRouter = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
@@ -119,12 +121,18 @@ artikelPositionRouter.get(
 
 artikelPositionRouter.get("/asad", authenticate, async (req: AuthRequest, res: Response) => {
   const start = Date.now();
-  const isAdminUser = req.user?.role === "a";
+  const isAdminUser = req.user?.role && Array.isArray(req.user.role) && req.user.role.includes("admin");
   const kundeId = isAdminUser
     ? req.query.kunde?.toString() ?? req.user?.id
     : req.user?.id;
-  await getAllArtikel(kundeId);
+  if (!req.user) return res.status(401).json({ error: "Unauthenticated" });
+  const [artikel, kundenPreis, kunden] = await Promise.all([
+    getArtikelByIdClean("68140c25f4a462d4c4c07aec"),
+    getKundenPreisByArtikelId("68140c25f4a462d4c4c07aec"),
+    getAllKunden(req.user),
+  ]);
   console.log("Dauer:", Date.now() - start, "ms");
+  res.status(200).json({ artikel, kundenPreis, kunden });
 });
 
 /**

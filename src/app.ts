@@ -6,7 +6,7 @@ import artikelPositionRouter from './routes/ArtikelPositionRoutes';
 import auftragRouter from './routes/AuftragRoutes';
 import kundenPreisRouter from './routes/KundenPreisRoutes';
 import kundeRouter from './routes/KundeRoutes';
-import verkaeuferRouter from './routes/VerkaeuferRoutes';
+import verkaeuferRouter from './routes/MitarbeiterRoutes';
 import loginRouter from './routes/LoginRouter';
 
 const app = express();
@@ -36,7 +36,7 @@ app.use("/api/artikelPosition", artikelPositionRouter);
 app.use("/api/auftrag", auftragRouter);
 app.use("/api/kundenPreis", kundenPreisRouter);
 app.use("/api/kunde", kundeRouter);
-app.use("/api/verkaeufer", verkaeuferRouter);
+app.use("/api/mitarbeiter", verkaeuferRouter);
 app.use("/api/login", loginRouter)
 
 

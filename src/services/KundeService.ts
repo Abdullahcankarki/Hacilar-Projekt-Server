@@ -77,8 +77,10 @@ export async function createKunde(data: {
  * Gibt alle Kunden zurück, die noch nicht freigegeben wurden (isApproved: false).
  * Nur für Admins erlaubt.
  */
-export async function getUnapprovedKunden(currentUser: LoginResource): Promise<KundeResource[]> {
-  if (currentUser.role !== "a") {
+export async function getUnapprovedKunden(
+  currentUser: LoginResource
+): Promise<KundeResource[]> {
+  if (!currentUser.role.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
 
@@ -112,7 +114,7 @@ export async function getUnapprovedKunden(currentUser: LoginResource): Promise<K
 export async function getAllKunden(
   currentUser: LoginResource
 ): Promise<KundeResource[]> {
-  if (currentUser.role !== "a") {
+  if (!currentUser.role.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
   const kunden = await Kunde.find();
@@ -146,7 +148,7 @@ export async function getKundeById(
   id: string,
   currentUser: LoginResource
 ): Promise<KundeResource> {
-  if (currentUser.role !== "a" && currentUser.id !== id) {
+  if (!currentUser.role.includes("admin") && currentUser.id !== id) {
     throw new Error("Zugriff verweigert");
   }
   const kunde = await Kunde.findById(id);
@@ -198,11 +200,11 @@ export async function updateKunde(
     kategorie: string;
     gewerbeDateiUrl: string;
     zusatzDateiUrl: string;
-    isApproved: boolean
+    isApproved: boolean;
   }>,
   currentUser: LoginResource
 ): Promise<KundeResource> {
-  if (currentUser.role !== "a" && currentUser.id !== id) {
+  if (!currentUser.role.includes("admin") && currentUser.id !== id) {
     throw new Error("Zugriff verweigert");
   }
   const updateData: any = {};
@@ -261,7 +263,7 @@ export async function deleteKunde(
   id: string,
   currentUser: LoginResource
 ): Promise<void> {
-  if (currentUser.role !== "a" && currentUser.id !== id) {
+  if (!currentUser.role.includes("admin") && currentUser.id !== id) {
     throw new Error("Zugriff verweigert");
   }
   const deleted = await Kunde.findByIdAndDelete(id);
@@ -295,7 +297,7 @@ export async function loginKunde(credentials: {
   }
   const payload: LoginResource = {
     id: kunde._id.toString(),
-    role: "u", // Kunde hat die Rolle "u" (user)
+    role: ["kunde"],
     exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, // Token gültig für 1 Tag
   };
   const token = jwt.sign(payload, JWT_SECRET);
@@ -315,7 +317,7 @@ export async function getKundenFavoriten(
   kundenId: string,
   currentUser: LoginResource
 ): Promise<string[]> {
-  if (currentUser.role !== "a" && currentUser.id !== kundenId) {
+  if (!currentUser.role.includes("admin") && currentUser.id !== kundenId) {
     throw new Error("Zugriff verweigert");
   }
 
@@ -332,7 +334,7 @@ export async function addKundenFavorit(
   artikelId: string,
   currentUser: LoginResource
 ): Promise<void> {
-  if (currentUser.role !== "a" && currentUser.id !== kundenId) {
+  if (!currentUser.role.includes("admin") && currentUser.id !== kundenId) {
     throw new Error("Zugriff verweigert");
   }
 
@@ -351,7 +353,7 @@ export async function removeKundenFavorit(
   artikelId: string,
   currentUser: LoginResource
 ): Promise<void> {
-  if (currentUser.role !== "a" && currentUser.id !== kundenId) {
+  if (!currentUser.role.includes("admin") && currentUser.id !== kundenId) {
     throw new Error("Zugriff verweigert");
   }
 

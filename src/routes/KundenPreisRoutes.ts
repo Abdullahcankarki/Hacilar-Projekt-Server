@@ -17,7 +17,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
 // Typdefinition für authentifizierte Requests
 interface AuthRequest extends Request {
-  user?: LoginResource;
+  user?: LoginResource & { role: string[] };
 }
 
 // Middleware: Authentifizierung mittels JWT
@@ -28,7 +28,7 @@ const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
   }
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as LoginResource;
+    const decoded = jwt.verify(token, JWT_SECRET) as LoginResource & { role: string[] };
     req.user = decoded;
     next();
   } catch (err) {
@@ -38,7 +38,7 @@ const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
 
 // Middleware: Prüft, ob der User Admin ist
 const isAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (!req.user || req.user.role !== 'a') {
+  if (!req.user || !req.user.role.includes('admin')) {
     return res.status(403).json({ error: 'Admin-Zugriff erforderlich' });
   }
   next();
@@ -85,7 +85,12 @@ kundenPreisRouter.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const { artikel, aufpreis, kategorie, region } = req.body;
-      const result = await setAufpreisForArtikelByFilter(artikel, aufpreis, { kategorie, region });
+      const result = await setAufpreisForArtikelByFilter(
+        artikel,
+        aufpreis,
+        { kategorie, region },
+        { role: req.user?.role || [] }
+      );
       res.status(200).json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -121,7 +126,7 @@ kundenPreisRouter.post(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const result = await createKundenPreis(req.body);
+      const result = await createKundenPreis(req.body, { role: req.user?.role || [] });
       res.status(201).json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -214,7 +219,7 @@ kundenPreisRouter.put(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const result = await updateKundenPreis(req.params.id, req.body);
+      const result = await updateKundenPreis(req.params.id, req.body, { role: req.user?.role || [] });
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -232,7 +237,7 @@ kundenPreisRouter.delete(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
-      await deleteKundenPreis(req.params.id);
+      await deleteKundenPreis(req.params.id, { role: req.user?.role || [] });
       res.json({ message: 'Kundenpreis gelöscht' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

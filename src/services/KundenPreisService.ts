@@ -9,7 +9,10 @@ export async function createKundenPreis(data: {
   artikel: string;
   customer: string;
   aufpreis: number;
-}): Promise<KundenPreisResource> {
+}, currentUser: { role: string[] }): Promise<KundenPreisResource> {
+  if (!currentUser.role.includes("admin")) {
+    throw new Error("Admin-Zugriff erforderlich");
+  }
   const newEntry = new KundenPreisModel({
     artikel: data.artikel,
     customer: data.customer,
@@ -44,13 +47,16 @@ export async function getKundenPreisById(id: string): Promise<KundenPreisResourc
  * Ruft alle kundenspezifischen Preise für eine bestimmte Artikel-ID ab.
  */
 export async function getKundenPreisByArtikelId(artikelId: string): Promise<KundenPreisResource[]> {
-  const entries = await KundenPreisModel.find({ artikel: artikelId });
-  return entries.map(entry => ({
-    id: entry._id.toString(),
-    artikel: entry.artikel.toString(),
-    customer: entry.customer.toString(),
-    aufpreis: entry.aufpreis,
-  }));
+  return KundenPreisModel.find({ artikel: artikelId })
+    .lean()
+    .then(entries =>
+      entries.map(entry => ({
+        id: entry._id.toString(),
+        artikel: entry.artikel.toString(),
+        customer: entry.customer.toString(),
+        aufpreis: entry.aufpreis,
+      }))
+    );
 }
 
 
@@ -89,8 +95,12 @@ export async function getAllKundenPreise(): Promise<KundenPreisResource[]> {
  */
 export async function updateKundenPreis(
   id: string,
-  data: Partial<{ artikel: string; customer: string; aufpreis: number; }>
+  data: Partial<{ artikel: string; customer: string; aufpreis: number; }>,
+  currentUser: { role: string[] }
 ): Promise<KundenPreisResource> {
+  if (!currentUser.role.includes("admin")) {
+    throw new Error("Admin-Zugriff erforderlich");
+  }
   const updated = await KundenPreisModel.findByIdAndUpdate(id, data, { new: true });
   if (!updated) {
     throw new Error('KundenPreis nicht gefunden');
@@ -106,7 +116,10 @@ export async function updateKundenPreis(
 /**
  * Löscht einen kundenspezifischen Preis.
  */
-export async function deleteKundenPreis(id: string): Promise<void> {
+export async function deleteKundenPreis(id: string, currentUser: { role: string[] }): Promise<void> {
+  if (!currentUser.role.includes("admin")) {
+    throw new Error("Admin-Zugriff erforderlich");
+  }
   const deleted = await KundenPreisModel.findByIdAndDelete(id);
   if (!deleted) {
     throw new Error('KundenPreis nicht gefunden');
@@ -120,8 +133,12 @@ export async function deleteKundenPreis(id: string): Promise<void> {
 export async function setAufpreisForArtikelByFilter(
   artikel: string,
   aufpreis: number,
-  filter: { kategorie?: string; region?: string }
+  filter: { kategorie?: string; region?: string },
+  currentUser: { role: string[] }
 ): Promise<KundenPreisResource[]> {
+  if (!currentUser.role.includes("admin")) {
+    throw new Error("Admin-Zugriff erforderlich");
+  }
   const query: any = {};
   if (filter.kategorie) query.kategorie = filter.kategorie;
   if (filter.region) query.region = filter.region;

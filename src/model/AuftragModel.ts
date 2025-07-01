@@ -6,6 +6,7 @@ export interface IAuftrag extends Document {
   status: 'offen' | 'in Bearbeitung' | 'abgeschlossen' | 'storniert'; // Auftragsstatus
   lieferdatum: Date; // Gewünschtes Lieferdatum
   bemerkungen: string; // Optionale Bemerkungen
+  bearbeiter: string; 
   createdAt: Date; // Erstellungsdatum
   updatedAt: Date; // Aktualisierungsdatum
 }
@@ -20,6 +21,7 @@ const auftragSchema = new Schema<IAuftrag>({
   },
   lieferdatum: { type: Date, required: false },
   bemerkungen: { type: String, required: false },
+  bearbeiter: { type: String, required: false },
 }, { timestamps: true });
 
 export const Auftrag = model<IAuftrag>("Auftrag", auftragSchema);

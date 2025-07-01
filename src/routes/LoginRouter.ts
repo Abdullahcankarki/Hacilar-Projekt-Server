@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { body, validationResult, ValidationError } from "express-validator";
 import jwt from "jsonwebtoken";
 import { loginKunde } from "../services/KundeService"; // Pfad ggf. anpassen
-import { loginVerkaeufer } from "../services/VerkaeuferService"; // Pfad ggf. anpassen
+import { loginMitarbeiter } from "../services/MitarbeiterService"; // Pfad ggf. anpassen
 import { LoginResource } from "../Resources"; // Pfad ggf. anpassen
 
 const loginRouter = express.Router();
@@ -72,7 +72,7 @@ loginRouter.post(
       if (req.body.email) {
         result = await loginKunde(req.body);
       } else if (req.body.name) {
-        result = await loginVerkaeufer(req.body);
+        result = await loginMitarbeiter(req.body);
       } else {
         return res.status(400).json({
           code: "INVALID_INPUT",

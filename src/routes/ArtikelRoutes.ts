@@ -39,7 +39,7 @@ const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
 
 // Middleware: Prüft, ob der User Admin ist (Admin-Zugriff wird hier vorausgesetzt)
 const isAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (!req.user || req.user.role !== 'a') {
+  if (!req.user || !req.user.role.includes('admin')) {
     return res.status(403).json({ error: 'Admin-Zugriff erforderlich' });
   }
   next();
@@ -67,7 +67,7 @@ artikelRouter.get(
   authenticate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const isAdminUser = req.user?.role === 'a';
+      const isAdminUser = req.user?.role.includes('admin');
       const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
 
       const namen = [
@@ -199,7 +199,7 @@ artikelRouter.post(
  */
 artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const isAdminUser = req.user?.role === 'a';
+    const isAdminUser = req.user?.role.includes('admin');
     const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
     const result = await getAllArtikel(kundeId);
     res.json(result);
@@ -252,7 +252,7 @@ artikelRouter.get(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const isAdminUser = req.user?.role === 'a';
+      const isAdminUser = req.user?.role.includes('admin');
       const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
       const result = await getArtikelById(req.params.id, kundeId);
       res.json(result);
