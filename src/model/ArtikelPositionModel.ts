@@ -11,6 +11,7 @@ export interface IArtikelPosition {
   zerlegung: boolean;
   vakuum: boolean;
   bemerkung: string;
+  zerlegeBemerkung: string,
 }
 
 const artikelPositionSchema = new Schema<IArtikelPosition>({
@@ -27,7 +28,8 @@ const artikelPositionSchema = new Schema<IArtikelPosition>({
   gesamtpreis: { type: Number},
   zerlegung: { type: Boolean },
   vakuum: { type: Boolean },
-  bemerkung: { type: String }
+  bemerkung: { type: String },
+  zerlegeBemerkung: { type: String }
 });
 
 artikelPositionSchema.pre(['save', 'findOneAndUpdate', 'updateOne', 'updateMany'], async function (next) {

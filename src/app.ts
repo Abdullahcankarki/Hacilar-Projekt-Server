@@ -8,6 +8,7 @@ import kundenPreisRouter from './routes/KundenPreisRoutes';
 import kundeRouter from './routes/KundeRoutes';
 import verkaeuferRouter from './routes/MitarbeiterRoutes';
 import loginRouter from './routes/LoginRouter';
+import zerlegeRouter from './routes/ZerlegeAuftragRoutes';
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use("/api/auftrag", auftragRouter);
 app.use("/api/kundenPreis", kundenPreisRouter);
 app.use("/api/kunde", kundeRouter);
 app.use("/api/mitarbeiter", verkaeuferRouter);
+app.use("/api/zerlege", zerlegeRouter);
 app.use("/api/login", loginRouter)
 
 

@@ -1,4 +1,7 @@
 import { Kunde } from "../model/KundeModel"; // Pfad ggf. anpassen
+import { Auftrag } from "../model/AuftragModel";
+import { ArtikelPosition } from "../model/ArtikelPositionModel";
+import { ZerlegeAuftragModel } from "../model/ZerlegeAuftragModel";
 import { KundeResource, LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -270,6 +273,25 @@ export async function deleteKunde(
   if (!deleted) {
     throw new Error("Kunde nicht gefunden");
   }
+
+  // Alle zugehörigen Aufträge des Kunden finden
+  const auftraege = await Auftrag.find({ kunde: id });
+
+  // Alle ArtikelPositionen zu diesen Aufträgen sammeln
+  const artikelPositionIds = auftraege.flatMap((auftrag) => auftrag.artikelPosition);
+
+  // ArtikelPositionen löschen
+  if (artikelPositionIds.length > 0) {
+    await ArtikelPosition.deleteMany({ _id: { $in: artikelPositionIds } });
+
+    // Zerlegeaufträge löschen, die diese ArtikelPositionen enthalten
+    await ZerlegeAuftragModel.deleteMany({
+      'artikelPositionen.artikelPositionId': { $in: artikelPositionIds }
+    });
+  }
+
+  // Aufträge löschen
+  await Auftrag.deleteMany({ kunde: id });
 }
 
 /**

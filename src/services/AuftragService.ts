@@ -1,3 +1,4 @@
+import { ZerlegeAuftragModel } from '../model/ZerlegeAuftragModel';
 import { Auftrag, IAuftrag } from '../model/AuftragModel'; // Pfad ggf. anpassen
 import { ArtikelPosition, IArtikelPosition } from '../model/ArtikelPositionModel'; // Pfad ggf. anpassen
 import { ArtikelPositionResource, AuftragResource } from '../Resources'; // Pfad ggf. anpassen
@@ -211,6 +212,16 @@ export async function deleteAuftrag(id: string): Promise<void> {
   if (!deleted) {
     throw new Error('Auftrag nicht gefunden');
   }
+  // Alle zugehörigen ArtikelPositionen löschen
+  const artikelPositionen = deleted.artikelPosition;
+  if (artikelPositionen && artikelPositionen.length > 0) {
+    await ArtikelPosition.deleteMany({ _id: { $in: artikelPositionen } });
+
+    // Alle Zerlegeaufträge mit mindestens einer dieser ArtikelPositionen löschen
+    await ZerlegeAuftragModel.deleteMany({
+      'artikelPositionen.artikelPositionId': { $in: artikelPositionen }
+    });
+  }
 }
 
 /**
@@ -226,6 +237,11 @@ export async function deleteAllAuftraege(): Promise<void> {
   // Lösche alle ArtikelPositionen
   if (alleArtikelPositionen.length > 0) {
     await ArtikelPosition.deleteMany({ _id: { $in: alleArtikelPositionen } });
+
+    // Alle Zerlegeaufträge mit mindestens einer dieser ArtikelPositionen löschen
+    await ZerlegeAuftragModel.deleteMany({
+      'artikelPositionen.artikelPositionId': { $in: alleArtikelPositionen }
+    });
   }
 
   // Lösche alle Aufträge

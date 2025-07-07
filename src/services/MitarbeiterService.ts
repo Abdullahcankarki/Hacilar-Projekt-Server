@@ -35,10 +35,10 @@ export async function createMitarbeiter(
 
   const hashedPassword = await bcrypt.hash(data.password, 10);
   const neuerMitarbeiter = new Mitarbeiter({
-    name: data.name,
+    name: data.name.toLowerCase(),
     password: hashedPassword,
     rollen: data.rollen,
-    email: data.email,
+    email: data.email?.toLowerCase(),
     telefon: data.telefon,
     abteilung: data.abteilung,
     aktiv: data.aktiv ?? true,
@@ -71,7 +71,7 @@ export async function loginMitarbeiter(
   if (!name || !password) {
     throw new Error("Name und Passwort sind erforderlich");
   }
-  const user = await Mitarbeiter.findOne({ name });
+  const user = await Mitarbeiter.findOne({ name: name.toLowerCase() });
   if (!user) {
     throw new Error("Ungültige Anmeldedaten");
   }
@@ -158,11 +158,17 @@ export async function updateMitarbeiter(
   }
 
   const updateData: any = { ...data };
+  if (data.name) {
+    updateData.name = data.name.toLowerCase()
+  }
   if (data.password) {
     updateData.password = await bcrypt.hash(data.password, 10);
   }
   if (data.eintrittsdatum) {
     updateData.eintrittsdatum = new Date(data.eintrittsdatum);
+  }
+  if (data.email) {
+    updateData.email = data.email?.toLowerCase()
   }
 
   const updated = await Mitarbeiter.findByIdAndUpdate(id, updateData, { new: true });
@@ -170,9 +176,9 @@ export async function updateMitarbeiter(
 
   return {
     id: updated._id.toString(),
-    name: updated.name,
+    name: updated.name.toLowerCase(),
     rollen: updated.rollen as MitarbeiterRolle[],
-    email: updated.email,
+    email: updated.email?.toLowerCase(),
     telefon: updated.telefon,
     abteilung: updated.abteilung,
     aktiv: updated.aktiv,

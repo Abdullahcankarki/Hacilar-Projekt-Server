@@ -4,6 +4,8 @@ import { ArtikelPositionResource } from '../Resources';
 import { KundenPreisModel } from '../model/KundenPreisModel';
 import { Auftrag } from '../model/AuftragModel';
 import { getKundenPreis } from './KundenPreisService'; // Pfad ggf. anpassen
+import { ZerlegeAuftragModel } from '../model/ZerlegeAuftragModel';
+import mongoose from 'mongoose';
 
 // ... Importe bleiben gleich
 
@@ -27,6 +29,7 @@ export async function createArtikelPosition(data: {
   zerlegung?: boolean;
   vakuum?: boolean;
   bemerkung?: string;
+  zerlegeBemerkung?: string;
 }): Promise<ArtikelPositionResource> {
   if (!data.artikel || !data.menge || !data.einheit) {
     throw new Error('Fehlende Felder bei der Artikelposition.');
@@ -84,9 +87,11 @@ export async function createArtikelPosition(data: {
     zerlegung: data.zerlegung ?? false,
     vakuum: data.vakuum ?? false,
     bemerkung: data.bemerkung?.trim() || '',
+    zerlegeBemerkung: data.zerlegeBemerkung,
     einzelpreis,
     gesamtgewicht,
     gesamtpreis,
+    auftragId: data.auftragId, // ensure auftragId is saved in the position
   });
 
   const savedPosition = await newPosition.save();
@@ -100,6 +105,38 @@ export async function createArtikelPosition(data: {
       }
       auftrag.artikelPosition.push(savedPosition._id);
       await auftrag.save();
+
+      if (data.zerlegung && data.auftragId) {
+        let zerlegeauftrag = await ZerlegeAuftragModel.findOne({ auftragId: data.auftragId, archiviert: false });
+
+        if (zerlegeauftrag) {
+          zerlegeauftrag.artikelPositionen.push({
+            artikelPositionId: savedPosition._id.toString(),
+            artikelName: savedPosition.artikelName,
+            menge: savedPosition.gesamtgewicht,
+            status: 'offen',
+            bemerkung: savedPosition.zerlegeBemerkung
+          });
+          await zerlegeauftrag.save();
+        } else {
+          const auftragPopulated = await Auftrag.findById(data.auftragId).populate<{ kunde: { name: string } }>('kunde');
+          const kundenName = auftragPopulated?.kunde?.name || 'Unbekannt';
+
+          await ZerlegeAuftragModel.create({
+            auftragId: data.auftragId,
+            kundenName,
+            artikelPositionen: [{
+              artikelPositionId: savedPosition._id.toString(),
+              artikelName: savedPosition.artikelName,
+              menge: savedPosition.gesamtgewicht,
+              status: 'offen',
+              bemerkung: savedPosition.zerlegeBemerkung
+            }],
+            erstelltAm: new Date(),
+            archiviert: false
+          });
+        }
+      }
     }
   }
 
@@ -111,6 +148,7 @@ export async function createArtikelPosition(data: {
     einheit: savedPosition.einheit,
     einzelpreis: savedPosition.einzelpreis,
     zerlegung: savedPosition.zerlegung,
+    zerlegeBemerkung: savedPosition.zerlegeBemerkung,
     vakuum: savedPosition.vakuum,
     bemerkung: savedPosition.bemerkung,
     gesamtgewicht: savedPosition.gesamtgewicht,
@@ -135,6 +173,7 @@ export async function getArtikelPositionById(id: string): Promise<ArtikelPositio
     einheit: position.einheit,
     einzelpreis: position.einzelpreis,
     zerlegung: position.zerlegung,
+    zerlegeBemerkung: position.zerlegeBemerkung,
     vakuum: position.vakuum,
     bemerkung: position.bemerkung,
     gesamtgewicht: position.gesamtgewicht,
@@ -161,6 +200,7 @@ export async function getAllArtikelPositionen(): Promise<ArtikelPositionResource
       zerlegung: pos.zerlegung,
       vakuum: pos.vakuum,
       bemerkung: pos.bemerkung,
+      zerlegeBemerkung: pos.zerlegeBemerkung,
       gesamtgewicht: pos.gesamtgewicht,
       gesamtpreis: pos.gesamtpreis,
     });
@@ -172,7 +212,6 @@ export async function getAllArtikelPositionen(): Promise<ArtikelPositionResource
 /**
  * Aktualisiert eine Artikelposition.
  */
-import mongoose from 'mongoose';
 
 export async function updateArtikelPosition(
   id: string,
@@ -183,6 +222,7 @@ export async function updateArtikelPosition(
     zerlegung: boolean;
     vakuum: boolean;
     bemerkung: string;
+    zerlegeBemerkung: string;
   }>
 ): Promise<ArtikelPositionResource> {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -207,9 +247,83 @@ export async function updateArtikelPosition(
   // Andere Felder aktualisieren
   if (data.menge !== undefined) position.menge = data.menge;
   if (data.einheit) position.einheit = data.einheit;
-  if (data.zerlegung !== undefined) position.zerlegung = data.zerlegung;
+  if (data.zerlegung !== undefined) {
+    // Falls vorher nicht Zerlegung und jetzt aktiviert → Zerlegeauftrag anlegen
+    const vorherZerlegung = position.zerlegung;
+    position.zerlegung = data.zerlegung;
+
+    if (!vorherZerlegung && data.zerlegung) {
+      const auftrag = await Auftrag.findOne({ artikelPosition: position._id }).populate<{ kunde: { name: string } }>('kunde');
+      if (auftrag) {
+        const kundenName = auftrag.kunde?.name || 'Unbekannt';
+
+        let zerlegeauftrag = await ZerlegeAuftragModel.findOne({ auftragId: auftrag._id, archiviert: false });
+
+        if (zerlegeauftrag) {
+          zerlegeauftrag.artikelPositionen.push({
+            artikelPositionId: position._id.toString(),
+            artikelName: position.artikelName,
+            menge: position.gesamtgewicht,
+            bemerkung: position.zerlegeBemerkung,
+            status: 'offen'
+          });
+          await zerlegeauftrag.save();
+        } else {
+          await ZerlegeAuftragModel.create({
+            auftragId: auftrag._id.toString(),
+            kundenName,
+            artikelPositionen: [{
+              artikelPositionId: position._id.toString(),
+              artikelName: position.artikelName,
+              menge: position.gesamtgewicht,
+              bemerkung: position.zerlegeBemerkung,
+              status: 'offen'
+            }],
+            erstelltAm: new Date(),
+            archiviert: false
+          });
+        }
+      }
+    }
+
+    if (vorherZerlegung && data.zerlegung) {
+      const zerlegeauftrag = await ZerlegeAuftragModel.findOne({ 'artikelPositionen.artikelPositionId': position._id });
+      if (zerlegeauftrag) {
+        // Duplikate verhindern
+        zerlegeauftrag.artikelPositionen = zerlegeauftrag.artikelPositionen.filter(p => p.artikelPositionId !== position._id.toString());
+
+        zerlegeauftrag.artikelPositionen.push({
+          artikelPositionId: position._id.toString(),
+          artikelName: position.artikelName,
+          menge: position.gesamtgewicht,
+          bemerkung: position.zerlegeBemerkung,
+          status: 'offen'
+        });
+
+        await zerlegeauftrag.save();
+      }
+    }
+
+    // Falls Zerlegung deaktiviert wurde: Artikelposition aus Zerlegeauftrag entfernen oder Auftrag löschen
+    if (vorherZerlegung && !data.zerlegung) {
+      const zerlegeauftrag = await ZerlegeAuftragModel.findOne({ 'artikelPositionen.artikelPositionId': position._id });
+      if (zerlegeauftrag) {
+        const neuePositionen = zerlegeauftrag.artikelPositionen.filter(p => p.artikelPositionId.toString() !== position._id.toString());
+
+        if (neuePositionen.length === 0) {
+          // Letzte Position wurde entfernt → gesamten Auftrag löschen
+          await ZerlegeAuftragModel.findByIdAndDelete(zerlegeauftrag._id);
+        } else {
+          // Nur diese Position entfernen
+          zerlegeauftrag.artikelPositionen = neuePositionen;
+          await zerlegeauftrag.save();
+        }
+      }
+    }
+  }
   if (data.vakuum !== undefined) position.vakuum = data.vakuum;
   if (data.bemerkung !== undefined) position.bemerkung = data.bemerkung.trim();
+  if (data.zerlegeBemerkung !== undefined) position.zerlegeBemerkung = data.zerlegeBemerkung.trim();
 
   // Optional: Gewicht neu berechnen, wenn menge oder einheit geändert wurden
   if (data.menge !== undefined || data.einheit) {
@@ -250,6 +364,24 @@ export async function updateArtikelPosition(
 
   const updated = await position.save();
 
+  if (updated.zerlegung === true) {
+    const zerlegeauftrag = await ZerlegeAuftragModel.findOne({ 'artikelPositionen.artikelPositionId': updated._id });
+    if (zerlegeauftrag) {
+      // Duplikate verhindern
+      zerlegeauftrag.artikelPositionen = zerlegeauftrag.artikelPositionen.filter(p => p.artikelPositionId !== updated._id.toString());
+
+      zerlegeauftrag.artikelPositionen.push({
+        artikelPositionId: updated._id.toString(),
+        artikelName: updated.artikelName,
+        menge: updated.gesamtgewicht,
+        bemerkung: updated.zerlegeBemerkung,
+        status: 'offen'
+      });
+
+      await zerlegeauftrag.save();
+    }
+  }
+
   return {
     id: updated._id.toString(),
     artikel: updated.artikel.toString(),
@@ -260,6 +392,7 @@ export async function updateArtikelPosition(
     zerlegung: updated.zerlegung,
     vakuum: updated.vakuum,
     bemerkung: updated.bemerkung,
+    zerlegeBemerkung: updated.zerlegeBemerkung,
     gesamtgewicht: updated.gesamtgewicht,
     gesamtpreis: updated.gesamtpreis,
   };
@@ -267,6 +400,30 @@ export async function updateArtikelPosition(
 //delete 
 export async function deleteArtikelPosition(id: string): Promise<void> {
   const deleted = await ArtikelPosition.findByIdAndDelete(id);
+  if (!deleted) {
+    throw new Error('Artikelposition nicht gefunden');
+  }
+
+  // Entferne diese Position auch aus dem Zerlegeauftrag, falls vorhanden
+  const zerlegeauftrag = await ZerlegeAuftragModel.findOne({ 'artikelPositionen.artikelPositionId': deleted._id });
+  if (zerlegeauftrag) {
+    const neuePositionen = zerlegeauftrag.artikelPositionen.filter(
+      p => p.artikelPositionId.toString() !== deleted._id.toString()
+    );
+
+    if (neuePositionen.length === 0) {
+      // Letzte Position wurde entfernt → gesamten Auftrag löschen
+      await ZerlegeAuftragModel.findByIdAndDelete(zerlegeauftrag._id);
+    } else {
+      // Nur diese Position entfernen
+      zerlegeauftrag.artikelPositionen = neuePositionen;
+      await zerlegeauftrag.save();
+    }
+  }
+}
+
+export async function deleteAllArtikelPosition(): Promise<void> {
+  const deleted = await ArtikelPosition.deleteMany({});
   if (!deleted) {
     throw new Error('Artikelposition nicht gefunden');
   }

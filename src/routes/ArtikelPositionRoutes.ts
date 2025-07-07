@@ -7,6 +7,7 @@ import {
   getAllArtikelPositionen,
   updateArtikelPosition,
   deleteArtikelPosition,
+  deleteAllArtikelPosition,
 } from "../services/ArtikelPositionService"; // Pfad ggf. anpassen
 import { LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import { ArtikelPosition } from "../model/ArtikelPositionModel";
@@ -209,6 +210,24 @@ artikelPositionRouter.put(
 );
 
 /**
+ * DELETE /artikelposition/all
+ * Löscht eine Artikelposition.
+ */
+artikelPositionRouter.delete(
+  "/all",
+  authenticate,
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      await deleteAllArtikelPosition();
+      res.json({ message: "Alle Artikelposition gelöscht" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
  * DELETE /artikelposition/:id
  * Löscht eine Artikelposition.
  */
@@ -226,5 +245,7 @@ artikelPositionRouter.delete(
     }
   }
 );
+
+
 
 export default artikelPositionRouter;
