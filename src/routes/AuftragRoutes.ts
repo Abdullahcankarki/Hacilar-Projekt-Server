@@ -238,8 +238,16 @@ auftragRouter.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const result = await getAuftragById(req.params.id);
-      // Falls der Nutzer kein Admin ist, muss der Auftrag dem eigenen Kunden zugeordnet sein.
-      if (!canViewAuftrag(req.user!, result)) {
+      // Neue Zugriffslogik laut Vorgabe, inkl. Kunde darf eigenen Auftrag sehen
+      if (
+        !(req.user?.role.includes('admin')) &&
+        !(req.user?.role.includes('buchhaltung')) &&
+        !(req.user?.role.includes('statistik')) &&
+        !(req.user?.role.includes('support')) &&
+        !(req.user?.role.includes('kommissionierung') && ['offen', 'in Bearbeitung'].includes(result.status)) &&
+        !(req.user?.role.includes('fahrer') && result.lieferdatum?.slice(0, 10) === new Date().toISOString().slice(0, 10)) &&
+        !(req.user?.role.includes('kunde') && result.kunde === req.user?.id)
+      ) {
         return res.status(403).json({ error: 'Zugriff verweigert' });
       }
       res.json(result);
