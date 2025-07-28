@@ -5,9 +5,10 @@ import {
   createArtikelPosition,
   getArtikelPositionById,
   getAllArtikelPositionen,
-  updateArtikelPosition,
+  updateArtikelPositionNormale,
   deleteArtikelPosition,
   deleteAllArtikelPosition,
+  updateArtikelPositionKommissionierung,
 } from "../services/ArtikelPositionService"; // Pfad ggf. anpassen
 import { LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import { ArtikelPosition } from "../model/ArtikelPositionModel";
@@ -201,7 +202,45 @@ artikelPositionRouter.put(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const result = await updateArtikelPosition(req.params.id, req.body);
+      const result = await updateArtikelPositionNormale(req.params.id, req.body);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PUT /artikelposition/:id/kommissionierung
+artikelPositionRouter.put(
+  "/:id/kommissionierung",
+  authenticate,
+  [
+    param("id").isMongoId().withMessage("Ungültige ArtikelPosition-ID"),
+    body("kommissioniertMenge").optional().isNumeric(),
+    body("kommissioniertEinheit")
+      .optional()
+      .isString()
+      .trim()
+      .isIn(["kg", "stück", "kiste", "karton"])
+      .withMessage("Ungültige Einheit"),
+    body("kommissioniertBemerkung").optional().isString().trim(),
+    body("kommissioniertAm").optional().isISO8601(),
+    body("bruttogewicht").optional().isNumeric(),
+    body("leergut").optional().isArray(),
+    body("chargennummern").optional().isArray(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Nicht authentifiziert" });
+      }
+      const result = await updateArtikelPositionKommissionierung(
+        req.params.id,
+        req.body,
+        req.user.id,
+        req.user.role.includes("admin")
+      );
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

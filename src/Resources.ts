@@ -15,6 +15,7 @@ export type MitarbeiterRolle =
   | "admin"
   | "verkauf"
   | "kommissionierung"
+  | "kontrolle"
   | "buchhaltung"
   | "wareneingang"
   | "lager"
@@ -48,6 +49,7 @@ export type KundeResource = {
 
 export type AuftragResource = {
   id?: string;
+  auftragsnummer: string;
   kunde: string; // ID des Kunden
   kundeName?: string;
   artikelPosition: string[]; // Array von IDs der Artikelpositionen
@@ -55,10 +57,21 @@ export type AuftragResource = {
   lieferdatum?: string; // ISO-Datum als String, optional
   bemerkungen?: string; // Optionale Bemerkungen
   bearbeiter?: string;
-  createdAt?: string; // Erstellungsdatum als ISO-String
-  updatedAt?: string; // Aktualisierungsdatum als ISO-String
   gewicht?: number;
   preis?: number;
+  kontrolliertAm?: string;
+  gesamtPaletten?: number;
+  kommissioniertVon?: string;
+  kommissioniertVonName?: string;
+  kontrolliertVon?: string;
+  kontrolliertVonName?: string;
+  kommissioniertStatus?: "offen" | "gestartet" | "fertig";
+  kontrolliertStatus?: "offen" | "in Kontrolle" | "geprüft";
+  kommissioniertStartzeit?: string;
+  kommissioniertEndzeit?: string;
+  kontrolliertZeit?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type ArtikelPositionResource = {
@@ -74,6 +87,20 @@ export type ArtikelPositionResource = {
   zerlegeBemerkung?: string;
   gesamtgewicht: number; // Berechnetes Gesamtgewicht
   gesamtpreis: number; // Berechneter Gesamtpreis
+  kommissioniertMenge?: number;
+  kommissioniertEinheit?: string;
+  kommissioniertBemerkung?: string;
+  kommissioniertVon?: string;
+  kommissioniertVonName?: string;
+  kommissioniertAm?: Date;
+  bruttogewicht?: number;
+  leergut?: {
+    leergutArt: string;
+    leergutAnzahl: number;
+    leergutGewicht: number;
+  }[];
+  nettogewicht?: number;
+  chargennummern?: string[];
 };
 
 export type ArtikelResource = {

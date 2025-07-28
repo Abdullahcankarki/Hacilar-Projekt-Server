@@ -82,7 +82,7 @@ export async function loginMitarbeiter(
   const payload: LoginResource = {
     id: user._id.toString(),
     role: user.rollen as MitarbeiterRolle[],
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 10,
   };
   const token = jwt.sign(payload, JWT_SECRET);
   return { token, user: payload };

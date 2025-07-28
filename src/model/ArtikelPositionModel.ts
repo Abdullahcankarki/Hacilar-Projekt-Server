@@ -12,6 +12,24 @@ export interface IArtikelPosition {
   vakuum: boolean;
   bemerkung: string;
   zerlegeBemerkung: string,
+  kommissioniertMenge?: number;
+  kommissioniertEinheit?: 'kg' | 'stück' | 'kiste' | 'karton';
+  kommissioniertBemerkung?: string;
+  kommissioniertVon?: Types.ObjectId;
+  kommissioniertVonName?: string;
+  kommissioniertAm?: Date;
+  kontrolliert?: boolean;
+  kontrolliertVon?: Types.ObjectId;
+  kontrolliertVonName?: string;
+  kontrolliertAm?: Date;
+  leergut?: {
+    leergutArt: string;
+    leergutAnzahl: number;
+    leergutGewicht: number;
+  }[];
+  bruttogewicht?: number;
+  nettogewicht?: number;
+  chargennummern?: string[];
 }
 
 const artikelPositionSchema = new Schema<IArtikelPosition>({
@@ -29,7 +47,28 @@ const artikelPositionSchema = new Schema<IArtikelPosition>({
   zerlegung: { type: Boolean },
   vakuum: { type: Boolean },
   bemerkung: { type: String },
-  zerlegeBemerkung: { type: String }
+  zerlegeBemerkung: { type: String },
+  kommissioniertMenge: { type: Number },
+  kommissioniertEinheit: {
+    type: String,
+    enum: ['kg', 'stück', 'kiste', 'karton']
+  },
+  kommissioniertBemerkung: { type: String },
+  kommissioniertVon: { type: Schema.Types.ObjectId },
+  kommissioniertVonName: { type: String },
+  kommissioniertAm: { type: Date },
+  kontrolliert: { type: Boolean },
+  kontrolliertVon: { type: Schema.Types.ObjectId },
+  kontrolliertVonName: { type: String },
+  kontrolliertAm: { type: Date },
+  leergut: [{
+    leergutArt: { type: String },
+    leergutAnzahl: { type: Number },
+    leergutGewicht: { type: Number }
+  }],
+  bruttogewicht: { type: Number },
+  nettogewicht: { type: Number },
+  chargennummern: [{ type: String }]
 });
 
 artikelPositionSchema.pre(['save', 'findOneAndUpdate', 'updateOne', 'updateMany'], async function (next) {
@@ -67,6 +106,11 @@ artikelPositionSchema.pre(['save', 'findOneAndUpdate', 'updateOne', 'updateMany'
   // Berechnung Gesamtgewicht und Gesamtpreis
   position.gesamtgewicht = position.menge * gewichtProEinheit;
   position.gesamtpreis = position.gesamtgewicht * position.einzelpreis;
+
+  if (position.bruttogewicht && position.leergut?.length) {
+    const gesamtLeergutGewicht = position.leergut.reduce((sum, l) => sum + l.leergutGewicht, 0);
+    position.nettogewicht = position.bruttogewicht - gesamtLeergutGewicht;
+  }
 
   next();
 });

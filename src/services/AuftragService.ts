@@ -1,19 +1,43 @@
-import { ZerlegeAuftragModel } from '../model/ZerlegeAuftragModel';
-import { Auftrag, IAuftrag } from '../model/AuftragModel'; // Pfad ggf. anpassen
-import { ArtikelPosition, IArtikelPosition } from '../model/ArtikelPositionModel'; // Pfad ggf. anpassen
-import { ArtikelPositionResource, AuftragResource } from '../Resources'; // Pfad ggf. anpassen
+import { ZerlegeAuftragModel } from "../model/ZerlegeAuftragModel";
+import { Auftrag, IAuftrag } from "../model/AuftragModel"; // Pfad ggf. anpassen
+import {
+  ArtikelPosition,
+  IArtikelPosition,
+} from "../model/ArtikelPositionModel"; // Pfad ggf. anpassen
+import { ArtikelPositionResource, AuftragResource } from "../Resources"; // Pfad ggf. anpassen
+import { getArtikelById } from "../services/ArtikelService";
+import { Mitarbeiter } from "../model/MitarbeiterModel";
+import { Counter } from "../model/CounterModel";
+
+
+
+
+async function generiereAuftragsnummer(): Promise<string> {
+  const counter = await Counter.findOneAndUpdate(
+    { name: "auftrag" },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+
+  return String(counter.seq).padStart(6, '0');  // z.B. 000001, 000002
+}
 
 /**
  * Berechnet für einen Auftrag das Gesamtgewicht und den Gesamtpreis,
  * indem alle zugehörigen ArtikelPositionen geladen und summiert werden.
  */
-async function computeTotals(auftrag: IAuftrag): Promise<{ totalWeight: number; totalPrice: number }> {
+async function computeTotals(
+  auftrag: IAuftrag
+): Promise<{ totalWeight: number; totalPrice: number }> {
   // Lade alle ArtikelPositionen, die in diesem Auftrag referenziert werden
   const positions: IArtikelPosition[] = await ArtikelPosition.find({
     _id: { $in: auftrag.artikelPosition },
   });
 
-  const totalWeight = positions.reduce((sum, pos) => sum + pos.gesamtgewicht, 0);
+  const totalWeight = positions.reduce(
+    (sum, pos) => sum + pos.gesamtgewicht,
+    0
+  );
   const totalPrice = positions.reduce((sum, pos) => sum + pos.gesamtpreis, 0);
 
   return { totalWeight, totalPrice };
@@ -28,19 +52,42 @@ function convertAuftragToResource(
   totals: { totalWeight: number; totalPrice: number }
 ): AuftragResource {
   return {
-    id: auftrag._id?.toString() || '',
-    kunde: typeof auftrag.kunde === 'string' ? auftrag.kunde : auftrag.kunde?._id?.toString() || '',
-    kundeName: (auftrag as any).kunde?.name || '',
+    id: auftrag._id?.toString() || "",
+    auftragsnummer: auftrag.auftragsnummer || " ",
+    kunde:
+      typeof auftrag.kunde === "string"
+        ? auftrag.kunde
+        : auftrag.kunde?._id?.toString() || "",
+    kundeName: (auftrag as any).kunde?.name || "",
     artikelPosition: Array.isArray(auftrag.artikelPosition)
-      ? auftrag.artikelPosition.map(id => id?.toString()).filter(Boolean)
+      ? auftrag.artikelPosition.map((id) => id?.toString()).filter(Boolean)
       : [],
     status: auftrag.status,
-    lieferdatum: auftrag.lieferdatum ? auftrag.lieferdatum.toISOString() : undefined,
+    lieferdatum: auftrag.lieferdatum
+      ? auftrag.lieferdatum.toISOString()
+      : undefined,
     bemerkungen: auftrag.bemerkungen,
     createdAt: auftrag.createdAt ? auftrag.createdAt.toISOString() : undefined,
     updatedAt: auftrag.updatedAt ? auftrag.updatedAt.toISOString() : undefined,
     gewicht: totals.totalWeight,
     preis: totals.totalPrice,
+    bearbeiter: auftrag.bearbeiter,
+    gesamtPaletten: auftrag.gesamtPaletten,
+    kommissioniertVon: auftrag.kommissioniertVon?.toString(),
+    kommissioniertVonName: auftrag.kommissioniertVonName,
+    kontrolliertVon: auftrag.kontrolliertVon?.toString(),
+    kontrolliertVonName: auftrag.kontrolliertVonName,
+    kommissioniertStatus: auftrag.kommissioniertStatus,
+    kontrolliertStatus: auftrag.kontrolliertStatus,
+    kommissioniertStartzeit: auftrag.kommissioniertStartzeit
+      ? auftrag.kommissioniertStartzeit.toISOString()
+      : undefined,
+    kommissioniertEndzeit: auftrag.kommissioniertEndzeit
+      ? auftrag.kommissioniertEndzeit.toISOString()
+      : undefined,
+    kontrolliertZeit: auftrag.kontrolliertZeit
+      ? auftrag.kontrolliertZeit.toISOString()
+      : undefined,
   };
 }
 
@@ -52,14 +99,16 @@ function convertAuftragToResource(
 export async function createAuftrag(data: {
   kunde: string;
   artikelPosition: string[];
-  status?: 'offen' | 'in Bearbeitung' | 'abgeschlossen' | 'storniert';
+  status?: "offen" | "in Bearbeitung" | "abgeschlossen" | "storniert";
   lieferdatum?: string;
   bemerkungen?: string;
 }): Promise<AuftragResource> {
+  const neueNummer = await generiereAuftragsnummer();
   const newAuftrag = new Auftrag({
+    auftragsnummer: neueNummer,
     kunde: data.kunde,
     artikelPosition: data.artikelPosition,
-    status: data.status ?? 'offen',
+    status: data.status ?? "offen",
     lieferdatum: data.lieferdatum ? new Date(data.lieferdatum) : undefined,
     bemerkungen: data.bemerkungen,
   });
@@ -74,9 +123,9 @@ export async function createAuftrag(data: {
  * Dabei werden die Gesamtwerte berechnet und als Teil der Resource zurückgegeben.
  */
 export async function getAuftragById(id: string): Promise<AuftragResource> {
-  const auftrag = await Auftrag.findById(id).populate('kunde', 'name');
+  const auftrag = await Auftrag.findById(id).populate("kunde", "name");
   if (!auftrag) {
-    throw new Error('Auftrag nicht gefunden');
+    throw new Error("Auftrag nicht gefunden");
   }
   const totals = await computeTotals(auftrag);
   return convertAuftragToResource(auftrag, totals);
@@ -86,8 +135,13 @@ export async function getAuftragById(id: string): Promise<AuftragResource> {
  * Ruft alle Aufträge eines bestimmten Kunden anhand der Kunden-ID ab.
  * Für jeden Auftrag werden Gesamtgewicht und Gesamtpreis berechnet.
  */
-export async function getAuftraegeByCustomerId(kundenId: string): Promise<AuftragResource[]> {
-  const auftraege = await Auftrag.find({ kunde: kundenId }).populate('kunde', 'name');
+export async function getAuftraegeByCustomerId(
+  kundenId: string
+): Promise<AuftragResource[]> {
+  const auftraege = await Auftrag.find({ kunde: kundenId }).populate(
+    "kunde",
+    "name"
+  );
 
   return Promise.all(
     auftraege.map(async (auftrag) => {
@@ -101,7 +155,7 @@ export async function getAuftraegeByCustomerId(kundenId: string): Promise<Auftra
  * Für jeden Auftrag werden Gesamtgewicht und Gesamtpreis berechnet.
  */
 export async function getAllAuftraege(): Promise<AuftragResource[]> {
-  const auftraege = await Auftrag.find().populate('kunde', 'name');
+  const auftraege = await Auftrag.find().populate("kunde", "name");
   return Promise.all(
     auftraege.map(async (auftrag) => {
       const totals = await computeTotals(auftrag);
@@ -120,9 +174,20 @@ export async function updateAuftrag(
   data: Partial<{
     kunde: string;
     artikelPosition: string[];
-    status: 'offen' | 'in Bearbeitung' | 'abgeschlossen' | 'storniert';
+    status: "offen" | "in Bearbeitung" | "abgeschlossen" | "storniert";
     lieferdatum: string;
     bemerkungen: string;
+    bearbeiter: string;
+    gesamtPaletten: number;
+    kommissioniertVon: string;
+    kommissioniertVonName: string;
+    kontrolliertVon: string;
+    kontrolliertVonName: string;
+    kommissioniertStatus: "offen" | "gestartet" | "fertig";
+    kontrolliertStatus: "offen" | "geprüft";
+    kommissioniertStartzeit: string;
+    kommissioniertEndzeit: string;
+    kontrolliertZeit: string;
   }>
 ): Promise<AuftragResource> {
   const updateData: any = {};
@@ -131,21 +196,58 @@ export async function updateAuftrag(
   if (data.status) updateData.status = data.status;
   if (data.lieferdatum) updateData.lieferdatum = new Date(data.lieferdatum);
   if (data.bemerkungen !== undefined) updateData.bemerkungen = data.bemerkungen;
+  if (data.bearbeiter !== undefined) updateData.bearbeiter = data.bearbeiter;
+  if (data.gesamtPaletten !== undefined)
+    updateData.gesamtPaletten = data.gesamtPaletten;
+  if (data.kommissioniertVon !== undefined)
+    updateData.kommissioniertVon = data.kommissioniertVon;
+  if (data.kontrolliertVon !== undefined)
+    updateData.kontrolliertVon = data.kontrolliertVon;
+  if (data.kommissioniertStatus !== undefined)
+    updateData.kommissioniertStatus = data.kommissioniertStatus;
+  if (data.kontrolliertStatus !== undefined)
+    updateData.kontrolliertStatus = data.kontrolliertStatus;
+  if (data.kommissioniertStartzeit)
+    updateData.kommissioniertStartzeit = new Date(data.kommissioniertStartzeit);
+  if (data.kommissioniertEndzeit)
+    updateData.kommissioniertEndzeit = new Date(data.kommissioniertEndzeit);
+  if (data.kontrolliertZeit)
+    updateData.kontrolliertZeit = new Date(data.kontrolliertZeit);
 
-  const updatedAuftrag = await Auftrag.findByIdAndUpdate(id, updateData, { new: true }).populate('kunde', 'name');
+  // Falls kommissioniertVon gesetzt wurde, hole kommissioniertVonName
+  if (data.kommissioniertVon) {
+    const mitarbeiter = await Mitarbeiter.findById(data.kommissioniertVon);
+    if (mitarbeiter) {
+      updateData.kommissioniertVonName = mitarbeiter.name;
+    }
+  }
+
+  // Falls kontrolliertVon gesetzt wurde, hole kontrolliertVonName
+  if (data.kontrolliertVon) {
+    const mitarbeiter = await Mitarbeiter.findById(data.kontrolliertVon);
+    if (mitarbeiter) {
+      updateData.kontrolliertVonName = mitarbeiter.name;
+    }
+  }
+
+  const updatedAuftrag = await Auftrag.findByIdAndUpdate(id, updateData, {
+    new: true,
+  }).populate("kunde", "name");
   if (!updatedAuftrag) {
-    throw new Error('Auftrag nicht gefunden');
+    throw new Error("Auftrag nicht gefunden");
   }
   const totals = await computeTotals(updatedAuftrag);
   return convertAuftragToResource(updatedAuftrag, totals);
 }
 
-export async function getLetzterAuftragMitPositionenByKundenId(kundenId: string): Promise<{
+export async function getLetzterAuftragMitPositionenByKundenId(
+  kundenId: string
+): Promise<{
   auftrag: AuftragResource;
   artikelPositionen: ArtikelPositionResource[];
 } | null> {
   const auftragDocs = await Auftrag.find({ kunde: kundenId })
-    .populate('kunde', 'name')
+    .populate("kunde", "name")
     .sort({ createdAt: -1 })
     .limit(1);
 
@@ -156,22 +258,24 @@ export async function getLetzterAuftragMitPositionenByKundenId(kundenId: string)
   const auftragResource = convertAuftragToResource(auftrag, totals);
 
   const positionen = await ArtikelPosition.find({
-    _id: { $in: auftrag.artikelPosition }
+    _id: { $in: auftrag.artikelPosition },
   });
 
-  const positionResources: ArtikelPositionResource[] = positionen.map(pos => ({
-    id: pos._id.toString(),
-    artikel: pos.artikel.toString(),
-    artikelName: pos.artikelName,
-    menge: pos.menge,
-    einheit: pos.einheit,
-    einzelpreis: pos.einzelpreis,
-    zerlegung: pos.zerlegung,
-    vakuum: pos.vakuum,
-    bemerkung: pos.bemerkung,
-    gesamtgewicht: pos.gesamtgewicht,
-    gesamtpreis: pos.gesamtpreis,
-  }));
+  const positionResources: ArtikelPositionResource[] = await Promise.all(
+    positionen.map(async (pos) => {
+      const artikel = await getArtikelById(pos.artikel.toString(), kundenId);
+      return {
+        id: pos._id.toString(),
+        artikel: pos.artikel.toString(),
+        artikelName: pos.artikelName,
+        menge: pos.menge,
+        einheit: pos.einheit,
+        einzelpreis: artikel.preis,
+        gesamtgewicht: pos.gesamtgewicht,
+        gesamtpreis: pos.gesamtpreis,
+      };
+    })
+  );
 
   return {
     auftrag: auftragResource,
@@ -182,7 +286,9 @@ export async function getLetzterAuftragMitPositionenByKundenId(kundenId: string)
 /**
  * Gibt den zuletzt erstellten Auftrag eines bestimmten Kunden zurück.
  */
-export async function getLetzterArtikelFromAuftragByKundenId(kundenId: string): Promise<string[]> {
+export async function getLetzterArtikelFromAuftragByKundenId(
+  kundenId: string
+): Promise<string[]> {
   const auftrag = await Auftrag.find({ kunde: kundenId })
     .sort({ createdAt: -1 }) // neuester Auftrag zuerst
     .limit(1);
@@ -193,7 +299,7 @@ export async function getLetzterArtikelFromAuftragByKundenId(kundenId: string): 
 
   // ArtikelPositionen laden
   const artikelPositionen = await ArtikelPosition.find({
-    _id: { $in: auftrag[0].artikelPosition }
+    _id: { $in: auftrag[0].artikelPosition },
   });
 
   // Nur Artikel-IDs extrahieren (distinct)
@@ -210,7 +316,7 @@ export async function getLetzterArtikelFromAuftragByKundenId(kundenId: string): 
 export async function deleteAuftrag(id: string): Promise<void> {
   const deleted = await Auftrag.findByIdAndDelete(id);
   if (!deleted) {
-    throw new Error('Auftrag nicht gefunden');
+    throw new Error("Auftrag nicht gefunden");
   }
   // Alle zugehörigen ArtikelPositionen löschen
   const artikelPositionen = deleted.artikelPosition;
@@ -219,7 +325,7 @@ export async function deleteAuftrag(id: string): Promise<void> {
 
     // Alle Zerlegeaufträge mit mindestens einer dieser ArtikelPositionen löschen
     await ZerlegeAuftragModel.deleteMany({
-      'artikelPositionen.artikelPositionId': { $in: artikelPositionen }
+      "artikelPositionen.artikelPositionId": { $in: artikelPositionen },
     });
   }
 }
@@ -232,7 +338,9 @@ export async function deleteAllAuftraege(): Promise<void> {
   const auftraege = await Auftrag.find();
 
   // Sammle alle ArtikelPosition-IDs
-  const alleArtikelPositionen = auftraege.flatMap(auftrag => auftrag.artikelPosition);
+  const alleArtikelPositionen = auftraege.flatMap(
+    (auftrag) => auftrag.artikelPosition
+  );
 
   // Lösche alle ArtikelPositionen
   if (alleArtikelPositionen.length > 0) {
@@ -240,10 +348,49 @@ export async function deleteAllAuftraege(): Promise<void> {
 
     // Alle Zerlegeaufträge mit mindestens einer dieser ArtikelPositionen löschen
     await ZerlegeAuftragModel.deleteMany({
-      'artikelPositionen.artikelPositionId': { $in: alleArtikelPositionen }
+      "artikelPositionen.artikelPositionId": { $in: alleArtikelPositionen },
     });
   }
 
   // Lösche alle Aufträge
   await Auftrag.deleteMany({});
+}
+/**
+ * Ruft alle Aufträge mit Status "in Bearbeitung" ab.
+ * Für jeden Auftrag werden Gesamtgewicht und Gesamtpreis berechnet.
+ */
+export async function getAlleAuftraegeInBearbeitung(): Promise<
+  AuftragResource[]
+> {
+  const auftraege = await Auftrag.find({ status: "in Bearbeitung" }).populate(
+    "kunde",
+    "name"
+  );
+  return Promise.all(
+    auftraege.map(async (auftrag) => {
+      const totals = await computeTotals(auftrag);
+      return convertAuftragToResource(auftrag, totals);
+    })
+  );
+}
+
+/**
+ * Setzt den Status eines Auftrags auf "in Bearbeitung" und kommissioniertStatus auf "offen".
+ * Nur für Admins gedacht.
+ */
+export async function setAuftragInBearbeitung(
+  id: string
+): Promise<AuftragResource> {
+  const updatedAuftrag = await Auftrag.findByIdAndUpdate(
+    id,
+    { status: "in Bearbeitung", kommissioniertStatus: "offen" },
+    { new: true }
+  ).populate("kunde", "name");
+
+  if (!updatedAuftrag) {
+    throw new Error("Auftrag nicht gefunden");
+  }
+
+  const totals = await computeTotals(updatedAuftrag);
+  return convertAuftragToResource(updatedAuftrag, totals);
 }
