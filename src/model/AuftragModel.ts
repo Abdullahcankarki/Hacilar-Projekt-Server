@@ -14,7 +14,7 @@ export interface IAuftrag extends Document {
   kontrolliertVon?: Types.ObjectId;
   kontrolliertVonName?: string;
   kommissioniertStatus?: 'offen' | 'gestartet' | 'fertig';
-  kontrolliertStatus?: 'offen' | 'geprüft';
+  kontrolliertStatus?: 'offen' | 'in Kontrolle' | 'geprüft';
   kommissioniertStartzeit?: Date;
   kommissioniertEndzeit?: Date;
   kontrolliertZeit?: Date;
@@ -40,7 +40,7 @@ const auftragSchema = new Schema<IAuftrag>({
   kontrolliertVon: { type: Schema.Types.ObjectId, ref: 'User' },
   kontrolliertVonName: { type: String },
   kommissioniertStatus: { type: String, enum: ['offen', 'gestartet', 'fertig']},
-  kontrolliertStatus: { type: String, enum: ['offen', 'geprüft']},
+  kontrolliertStatus: { type: String, enum: ['offen', 'in Kontrolle', 'geprüft']},
   kommissioniertStartzeit: { type: Date },
   kommissioniertEndzeit: { type: Date },
   kontrolliertZeit: { type: Date },

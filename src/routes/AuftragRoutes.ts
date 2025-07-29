@@ -314,19 +314,13 @@ auftragRouter.get(
         ) &&
         !(
           istKontrolleur &&
-          (
-            (result.kontrolliertStatus === "offen" && result.kommissioniertStatus === "fertig") ||
-            (result.kontrolliertStatus === "in Kontrolle" && result.kontrolliertVon === req.user?.id)
-          )
+          ((result.kontrolliertStatus === "offen" &&
+            result.kommissioniertStatus === "fertig") ||
+            (result.kontrolliertStatus === "in Kontrolle" &&
+              result.kontrolliertVon === req.user?.id))
         ) &&
-        !(
-          istFahrer &&
-          lieferdatumHeute
-        ) &&
-        !(
-          istKunde &&
-          result.kunde === req.user?.id
-        )
+        !(istFahrer && lieferdatumHeute) &&
+        !(istKunde && result.kunde === req.user?.id)
       ) {
         return res.status(403).json({ error: "Zugriff verweigert" });
       }
@@ -418,9 +412,11 @@ auftragRouter.put(
       const auftrag = await getAuftragById(req.params.id);
 
       const istAdmin = req.user?.role.includes("admin");
+      const istKommissionierer = req.user?.role.includes("kommissionierung");
+      const istKontrolleur = req.user?.role.includes("kontrolle");
       const istKunde = req.user?.role.includes("kunde");
 
-      if (!istAdmin && !istKunde) {
+      if (!istAdmin && !istKommissionierer && !istKunde && !istKontrolleur) {
         return res.status(403).json({
           error: "Nur Admins oder Kunden dürfen Aufträge bearbeiten",
         });

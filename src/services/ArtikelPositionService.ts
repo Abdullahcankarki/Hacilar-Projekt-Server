@@ -352,7 +352,7 @@ export async function updateArtikelPositionKommissionierung(
   // Kommissionierung fertig, Kontrolle offen
   else if (
     kommissioniertStatus === "fertig" &&
-    kontrolliertStatus === "offen"
+    kontrolliertStatus === "in Kontrolle"
   ) {
     // Nur Kontrollierer/Admin darf diese Felder ändern
     if (isKontrollierer) {
