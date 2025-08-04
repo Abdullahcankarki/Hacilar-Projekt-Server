@@ -1,4 +1,6 @@
 import express from 'express';
+import { SerialPortStream } from '@serialport/stream';
+import { autoDetect } from '@serialport/bindings-cpp';
 import "express-async-errors"; // needs to be imported before routers and other stuff!
 import cors from 'cors';
 import artikelRouter from './routes/ArtikelRoutes';
@@ -11,6 +13,29 @@ import loginRouter from './routes/LoginRouter';
 import zerlegeRouter from './routes/ZerlegeAuftragRoutes';
 
 const app = express();
+
+// let aktuellesGewicht = '—';
+
+// const Binding = autoDetect();
+
+// const waagenPort = new SerialPortStream({
+//   binding: Binding,
+//   path: '/dev/tty.usbserial-1234', // anpassen je nach System
+//   baudRate: 9600,
+// });
+
+// waagenPort.on('data', (data: Buffer) => {
+//   const raw = data.toString().trim();
+//   const match = raw.match(/([0-9]+\.[0-9]+)/);
+//   if (match) {
+//     aktuellesGewicht = match[1];
+//     console.log('Gewicht:', aktuellesGewicht);
+//   }
+// });
+
+// app.get('/api/gewicht', (req, res) => {
+//   res.json({ gewicht: aktuellesGewicht });
+// });
 
 // Middleware:
 app.use('*', express.json()) // vgl. Folie 138

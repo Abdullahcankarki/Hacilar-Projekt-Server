@@ -107,11 +107,6 @@ artikelPositionSchema.pre(['save', 'findOneAndUpdate', 'updateOne', 'updateMany'
   position.gesamtgewicht = position.menge * gewichtProEinheit;
   position.gesamtpreis = position.gesamtgewicht * position.einzelpreis;
 
-  if (position.bruttogewicht && position.leergut?.length) {
-    const gesamtLeergutGewicht = position.leergut.reduce((sum, l) => sum + l.leergutGewicht, 0);
-    position.nettogewicht = position.bruttogewicht - gesamtLeergutGewicht;
-  }
-
   next();
 });
 
