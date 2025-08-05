@@ -142,6 +142,7 @@ export type ZerlegeArtikelPosition = {
 export type ZerlegeauftragResource = {
   id?: string;
   auftragId: string;
+  auftragsnummer: string;
   kundenName: string;
   artikelPositionen: ZerlegeArtikelPosition[];
   zerlegerId?: string;

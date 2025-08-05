@@ -9,9 +9,6 @@ import { getArtikelById } from "../services/ArtikelService";
 import { Mitarbeiter } from "../model/MitarbeiterModel";
 import { Counter } from "../model/CounterModel";
 
-
-
-
 async function generiereAuftragsnummer(): Promise<string> {
   const counter = await Counter.findOneAndUpdate(
     { name: "auftrag" },
@@ -19,7 +16,7 @@ async function generiereAuftragsnummer(): Promise<string> {
     { new: true, upsert: true }
   );
 
-  return String(counter.seq).padStart(6, '0');  // z.B. 000001, 000002
+  return String(counter.seq).padStart(6, "0"); // z.B. 000001, 000002
 }
 
 /**
@@ -356,12 +353,39 @@ export async function deleteAllAuftraege(): Promise<void> {
   await Auftrag.deleteMany({});
 }
 /**
- * Ruft alle Aufträge mit Status "in Bearbeitung" ab.
- * Für jeden Auftrag werden Gesamtgewicht und Gesamtpreis berechnet.
+ * Gibt alle Aufträge mit Status "in Bearbeitung" zurück.
+ * Falls der aktuelle Nutzer bereits einen "gestarteten" Auftrag hat,
+ * wird nur dieser Auftrag zurückgegeben.
  */
-export async function getAlleAuftraegeInBearbeitung(): Promise<
-  AuftragResource[]
-> {
+export async function getAlleAuftraegeInBearbeitung(
+  currentUserId: string,
+  isKommissionierer: boolean
+): Promise<AuftragResource[]> {
+  if (isKommissionierer) {
+    // Falls der aktuelle Kommissionierer bereits einen "gestarteten" Auftrag hat, gib nur diesen zurück
+    const eigenerGestarteterAuftrag = await Auftrag.findOne({
+      kommissioniertVon: currentUserId,
+      kommissioniertStatus: "gestartet",
+    }).populate("kunde", "name");
+
+    if (eigenerGestarteterAuftrag) {
+      const totals = await computeTotals(eigenerGestarteterAuftrag);
+      return [convertAuftragToResource(eigenerGestarteterAuftrag, totals)];
+    } else {
+      const auftraege = await Auftrag.find({
+        status: "in Bearbeitung",
+        kommissioniertStatus: "offen"
+      }).populate("kunde", "name");
+      return Promise.all(
+        auftraege.map(async (auftrag) => {
+          const totals = await computeTotals(auftrag);
+          return convertAuftragToResource(auftrag, totals);
+        })
+      );
+    }
+  }
+
+  // Andernfalls alle Aufträge mit Status "in Bearbeitung"
   const auftraege = await Auftrag.find({ status: "in Bearbeitung" }).populate(
     "kunde",
     "name"

@@ -11,6 +11,7 @@ export interface IZerlegeArtikelPosition {
 
 export interface IZerlegeAuftrag extends Document {
   auftragId: string;
+  auftragsnummer: string;
   kundenName: string;
   artikelPositionen: IZerlegeArtikelPosition[];
   zerlegerId?: string;
@@ -30,6 +31,7 @@ const ZerlegeArtikelPositionSchema = new Schema<IZerlegeArtikelPosition>({
 
 const ZerlegeAuftragSchema = new Schema<IZerlegeAuftrag>({
   auftragId: { type: String, required: true },
+  auftragsnummer: { type: String},
   kundenName: { type: String, required: true },
   artikelPositionen: { type: [ZerlegeArtikelPositionSchema], required: true },
   zerlegerId: { type: String },

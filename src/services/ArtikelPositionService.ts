@@ -495,6 +495,7 @@ export async function updateArtikelPositionNormale(
         } else {
           await ZerlegeAuftragModel.create({
             auftragId: auftrag._id.toString(),
+            auftragsnummer: auftrag.auftragsnummer,
             kundenName,
             artikelPositionen: [
               {

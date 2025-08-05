@@ -177,7 +177,7 @@ auftragRouter.get(
 /**
  * GET /auftraege/in-bearbeitung
  * Gibt alle Aufträge mit Status "in Bearbeitung" zurück.
- * Nur Admins dürfen diesen Endpunkt aufrufen.
+ * Nur Admins, Kommissionierer oder Kontrolle dürfen diesen Endpunkt aufrufen.
  */
 auftragRouter.get(
   "/in-bearbeitung",
@@ -193,7 +193,10 @@ auftragRouter.get(
           .status(403)
           .json({ error: "Nur Admins dürfen diese Aufträge abrufen" });
       }
-      const result = await getAlleAuftraegeInBearbeitung();
+      const result = await getAlleAuftraegeInBearbeitung(
+        req.user?.id,
+        req.user?.role.includes("kommissionierung")
+      );
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

@@ -5,6 +5,7 @@ function toResource(doc: any): ZerlegeauftragResource {
   return {
     id: doc._id.toString(),
     auftragId: doc.auftragId,
+    auftragsnummer: doc.auftragsnummer ?? "-",
     kundenName: doc.kundenName,
     artikelPositionen: doc.artikelPositionen.map((p: any) => ({
       artikelPositionId: p.artikelPositionId,
@@ -77,6 +78,14 @@ export async function deleteZerlegeauftraegeByDatum(
   }
 
   return await ZerlegeAuftragModel.deleteMany({
-    'artikelPositionen.status': 'erledigt'
+    $expr: {
+      $allElementsTrue: {
+        $map: {
+          input: "$artikelPositionen",
+          as: "pos",
+          in: { $eq: ["$$pos.status", "erledigt"] }
+        }
+      }
+    }
   });
 }
