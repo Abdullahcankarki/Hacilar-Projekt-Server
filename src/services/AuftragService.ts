@@ -70,6 +70,7 @@ function convertAuftragToResource(
     preis: totals.totalPrice,
     bearbeiter: auftrag.bearbeiter,
     gesamtPaletten: auftrag.gesamtPaletten,
+    gesamtBoxen: auftrag.gesamtBoxen,
     kommissioniertVon: auftrag.kommissioniertVon?.toString(),
     kommissioniertVonName: auftrag.kommissioniertVonName,
     kontrolliertVon: auftrag.kontrolliertVon?.toString(),
@@ -176,6 +177,7 @@ export async function updateAuftrag(
     bemerkungen: string;
     bearbeiter: string;
     gesamtPaletten: number;
+    gesamtBoxen: number;
     kommissioniertVon: string;
     kommissioniertVonName: string;
     kontrolliertVon: string;
@@ -196,6 +198,8 @@ export async function updateAuftrag(
   if (data.bearbeiter !== undefined) updateData.bearbeiter = data.bearbeiter;
   if (data.gesamtPaletten !== undefined)
     updateData.gesamtPaletten = data.gesamtPaletten;
+  if (data.gesamtBoxen !== undefined) 
+    updateData.gesamtBoxen = data.gesamtBoxen;
   if (data.kommissioniertVon !== undefined)
     updateData.kommissioniertVon = data.kommissioniertVon;
   if (data.kontrolliertVon !== undefined)
@@ -374,7 +378,7 @@ export async function getAlleAuftraegeInBearbeitung(
     } else {
       const auftraege = await Auftrag.find({
         status: "in Bearbeitung",
-        kommissioniertStatus: "offen"
+        kommissioniertStatus: "offen",
       }).populate("kunde", "name");
       return Promise.all(
         auftraege.map(async (auftrag) => {

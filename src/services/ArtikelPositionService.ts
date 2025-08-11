@@ -255,11 +255,6 @@ export async function getAllArtikelPositionen(): Promise<
 }
 
 /**
- * Aktualisiert eine Artikelposition.
- */
-
-// Die Funktion benötigt nun userId, aktuellerBenutzername und isAdmin aus dem Kontext.
-/**
  * Aktualisiert eine Artikelposition (nur Kommissionierungsfelder).
  * Für Kommissionierer, Kontrollierer, Admin.
  */

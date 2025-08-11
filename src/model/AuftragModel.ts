@@ -9,6 +9,7 @@ export interface IAuftrag extends Document {
   bemerkungen: string; // Optionale Bemerkungen
   bearbeiter: string;
   gesamtPaletten: number;
+  gesamtBoxen: number;
   kommissioniertVon?: Types.ObjectId;
   kommissioniertVonName?: string;
   kontrolliertVon?: Types.ObjectId;
@@ -35,6 +36,7 @@ const auftragSchema = new Schema<IAuftrag>({
   bemerkungen: { type: String, required: false },
   bearbeiter: { type: String, required: false },
   gesamtPaletten: { type: Number, required: false },
+  gesamtBoxen: { type: Number, required: false },
   kommissioniertVon: { type: Schema.Types.ObjectId, ref: 'User' },
   kommissioniertVonName: { type: String },
   kontrolliertVon: { type: Schema.Types.ObjectId, ref: 'User' },
