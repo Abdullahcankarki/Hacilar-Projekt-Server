@@ -102,6 +102,7 @@ export type ArtikelPositionResource = {
   }[];
   nettogewicht?: number;
   chargennummern?: string[];
+  erfassungsModus?: "GEWICHT" | "KARTON" | "STÜCK";
 };
 
 export type ArtikelResource = {
@@ -115,6 +116,7 @@ export type ArtikelResource = {
   gewichtProKarton?: number; // Gewicht pro Karton (optional)
   gewichtProKiste?: number; // Gewicht pro Kiste (optional)
   ausverkauft?: boolean;
+  erfassungsModus?: "GEWICHT" | "KARTON" | "STÜCK";
 };
 
 export type LoginResource = {

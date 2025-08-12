@@ -16,7 +16,8 @@ export async function createArtikel(data: {
   gewichtProKarton?: number;
   gewichtProKiste?: number;
   bildUrl?: string;
-  ausverkauft?: boolean
+  ausverkauft?: boolean;
+  erfassungsModus?: string;
 }): Promise<ArtikelResource> {
   const newArtikel = new ArtikelModel({
     preis: data.preis,
@@ -28,6 +29,7 @@ export async function createArtikel(data: {
     gewichtProKiste: data.gewichtProKiste,
     bildUrl: data.bildUrl,
     ausverkauft: data.ausverkauft,
+    erfassungsModus: data.erfassungsModus ?? 'GEWICHT'
   });
   const saved = await newArtikel.save();
   return {
@@ -41,6 +43,7 @@ export async function createArtikel(data: {
     gewichtProKiste: saved.gewichtProKiste,
     bildUrl: saved.bildUrl,
     ausverkauft: saved.ausverkauft,
+    erfassungsModus: saved.erfassungsModus ?? 'GEWICHT',
   };
 }
 
@@ -78,6 +81,7 @@ export async function getArtikelById(
     gewichtProKiste: artikel.gewichtProKiste,
     bildUrl: artikel.bildUrl,
     ausverkauft: artikel.ausverkauft,
+    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT',
   };
 }
 
@@ -101,6 +105,7 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
+      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
     }));
   }
 
@@ -126,6 +131,7 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
+      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
     };
   });
 }
@@ -154,6 +160,7 @@ export async function getArtikelByIdClean(
     gewichtProKiste: artikel.gewichtProKiste,
     bildUrl: artikel.bildUrl,
     ausverkauft: artikel.ausverkauft,
+    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
   };
 }
 
@@ -178,6 +185,7 @@ export async function getAllArtikelClean(): Promise<ArtikelResource[]> {
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
+      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
     });
   }
 
@@ -207,6 +215,7 @@ export async function getArtikelByNames(
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
+      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
     }));
   }
 
@@ -235,6 +244,7 @@ export async function getArtikelByNames(
       gewichtProKiste: artikel.gewichtProKiste,
       bildUrl: artikel.bildUrl,
       ausverkauft: artikel.ausverkauft,
+      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
     };
   });
 }
@@ -254,6 +264,7 @@ export async function updateArtikel(
     gewichtProKiste: number;
     bildUrl?: string;
     ausverkauft?: boolean;
+    erfassungsModus?: string;
   }>
 ): Promise<ArtikelResource> {
   const updated = await ArtikelModel.findByIdAndUpdate(id, data, { new: true });
@@ -270,7 +281,8 @@ export async function updateArtikel(
     gewichtProKarton: updated.gewichtProKarton,
     gewichtProKiste: updated.gewichtProKiste,
     bildUrl: updated.bildUrl,
-    ausverkauft: updated.ausverkauft
+    ausverkauft: updated.ausverkauft,
+    erfassungsModus: updated.erfassungsModus ?? 'GEWICHT'
   };
 }
 

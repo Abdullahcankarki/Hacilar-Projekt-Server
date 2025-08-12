@@ -12,7 +12,11 @@ import {
 } from "../services/ArtikelPositionService"; // Pfad ggf. anpassen
 import { LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import { ArtikelPosition } from "../model/ArtikelPositionModel";
-import { getAllArtikel, getAllArtikelClean, getArtikelByIdClean } from "../services/ArtikelService";
+import {
+  getAllArtikel,
+  getAllArtikelClean,
+  getArtikelByIdClean,
+} from "../services/ArtikelService";
 import { getKundenPreisByArtikelId } from "../services/KundenPreisService";
 import { getAllKunden } from "../services/KundeService";
 
@@ -121,21 +125,28 @@ artikelPositionRouter.get(
   }
 );
 
-artikelPositionRouter.get("/asad", authenticate, async (req: AuthRequest, res: Response) => {
-  const start = Date.now();
-  const isAdminUser = req.user?.role && Array.isArray(req.user.role) && req.user.role.includes("admin");
-  const kundeId = isAdminUser
-    ? req.query.kunde?.toString() ?? req.user?.id
-    : req.user?.id;
-  if (!req.user) return res.status(401).json({ error: "Unauthenticated" });
-  const [artikel, kundenPreis, kunden] = await Promise.all([
-    getArtikelByIdClean("68140c25f4a462d4c4c07aec"),
-    getKundenPreisByArtikelId("68140c25f4a462d4c4c07aec"),
-    getAllKunden(req.user),
-  ]);
-  console.log("Dauer:", Date.now() - start, "ms");
-  res.status(200).json({ artikel, kundenPreis, kunden });
-});
+artikelPositionRouter.get(
+  "/asad",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    const start = Date.now();
+    const isAdminUser =
+      req.user?.role &&
+      Array.isArray(req.user.role) &&
+      req.user.role.includes("admin");
+    const kundeId = isAdminUser
+      ? req.query.kunde?.toString() ?? req.user?.id
+      : req.user?.id;
+    if (!req.user) return res.status(401).json({ error: "Unauthenticated" });
+    const [artikel, kundenPreis, kunden] = await Promise.all([
+      getArtikelByIdClean("68140c25f4a462d4c4c07aec"),
+      getKundenPreisByArtikelId("68140c25f4a462d4c4c07aec"),
+      getAllKunden(req.user),
+    ]);
+    console.log("Dauer:", Date.now() - start, "ms");
+    res.status(200).json({ artikel, kundenPreis, kunden });
+  }
+);
 
 /**
  * GET /artikelposition/:id
@@ -202,7 +213,10 @@ artikelPositionRouter.put(
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const result = await updateArtikelPositionNormale(req.params.id, req.body);
+      const result = await updateArtikelPositionNormale(
+        req.params.id,
+        req.body
+      );
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -216,18 +230,59 @@ artikelPositionRouter.put(
   authenticate,
   [
     param("id").isMongoId().withMessage("Ungültige ArtikelPosition-ID"),
-    body("kommissioniertMenge").optional().isNumeric(),
+
+    body("kommissioniertMenge")
+      .optional({ nullable: true })
+      .custom(
+        (val) =>
+          val === "" ||
+          val === null ||
+          val === undefined ||
+          !isNaN(Number(String(val)))
+      )
+      .withMessage("Kommissionierte Menge muss eine Zahl sein oder leer"),
+
     body("kommissioniertEinheit")
       .optional()
       .isString()
       .trim()
       .isIn(["kg", "stück", "kiste", "karton"])
       .withMessage("Ungültige Einheit"),
+
     body("kommissioniertBemerkung").optional().isString().trim(),
+
     body("kommissioniertAm").optional().isISO8601(),
-    body("bruttogewicht").optional().isNumeric(),
-    body("leergut").optional().isArray(),
-    body("chargennummern").optional().isArray(),
+
+    body("bruttogewicht")
+      .optional({ nullable: true })
+      .custom(
+        (val) =>
+          val === "" ||
+          val === null ||
+          val === undefined ||
+          !isNaN(Number(String(val)))
+      )
+      .withMessage("Bruttogewicht muss eine Zahl sein oder leer"),
+
+    body("leergut")
+      .optional({ nullable: true })
+      .custom(
+        (val) =>
+          val === "" ||
+          val === null ||
+          Array.isArray(val)
+      )
+      .withMessage("Leergut muss ein Array oder leer sein"),
+
+    body("chargennummern")
+      .optional({ nullable: true })
+      .custom(
+        (val) =>
+          val === "" ||
+          val === null ||
+          Array.isArray(val)
+      )
+      .withMessage("Chargennummern muss ein Array oder leer sein"),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
@@ -247,6 +302,7 @@ artikelPositionRouter.put(
     }
   }
 );
+
 
 /**
  * DELETE /artikelposition/all
@@ -284,7 +340,5 @@ artikelPositionRouter.delete(
     }
   }
 );
-
-
 
 export default artikelPositionRouter;

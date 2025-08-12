@@ -10,6 +10,7 @@ export interface IArtikel extends Document {
   gewichtProKiste: number;   // Gewicht pro Kiste
   bildUrl?: string;
   ausverkauft?: boolean;
+  erfassungsModus?: 'GEWICHT' | 'KARTON' | 'STÜCK';
 }
 
 const ArtikelSchema = new Schema<IArtikel>({
@@ -21,7 +22,8 @@ const ArtikelSchema = new Schema<IArtikel>({
   gewichtProKarton: { type: Number},
   gewichtProKiste: { type: Number},
   bildUrl: { type: String },
-  ausverkauft: {type: Boolean, default: false}
+  ausverkauft: {type: Boolean, default: false},
+  erfassungsModus: { type: String, enum: ['GEWICHT', 'KARTON', 'STÜCK'], default: 'GEWICHT' }
 });
 
 export const ArtikelModel = model<IArtikel>('Artikel', ArtikelSchema);

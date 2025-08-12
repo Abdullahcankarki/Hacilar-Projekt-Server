@@ -96,6 +96,7 @@ export async function createArtikelPosition(data: {
     gesamtgewicht,
     gesamtpreis,
     auftragId: data.auftragId, // ensure auftragId is saved in the position
+    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
   });
 
   const savedPosition = await newPosition.save();
@@ -174,6 +175,7 @@ export async function createArtikelPosition(data: {
     leergut: savedPosition.leergut || [],
     nettogewicht: savedPosition.nettogewicht,
     chargennummern: savedPosition.chargennummern || [],
+    erfassungsModus: savedPosition.erfassungsModus ?? 'GEWICHT'
   };
 }
 
@@ -211,6 +213,7 @@ export async function getArtikelPositionById(
     leergut: position.leergut || [],
     nettogewicht: position.nettogewicht,
     chargennummern: position.chargennummern || [],
+    erfassungsModus: position.erfassungsModus ?? 'GEWICHT'
   };
 }
 
@@ -248,6 +251,7 @@ export async function getAllArtikelPositionen(): Promise<
       leergut: pos.leergut || [],
       nettogewicht: pos.nettogewicht,
       chargennummern: pos.chargennummern || [],
+      erfassungsModus: pos.erfassungsModus ?? 'GEWICHT'
     });
   }
 
@@ -276,6 +280,22 @@ export async function updateArtikelPositionKommissionierung(
   userId: string,
   isAdmin: boolean
 ): Promise<ArtikelPositionResource> {
+  // --- Helpers: robust number parsing ---
+  const toNumberOrUndefined = (v: any): number | undefined => {
+    if (v === null || v === undefined) return undefined;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed === '') return undefined;
+      const normalized = trimmed.replace(',', '.');
+      const n = Number(normalized);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+  };
+
+  const isFiniteNumber = (n: any): n is number => typeof n === 'number' && Number.isFinite(n);
+
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new Error("Ungültige Artikelpositions-ID");
   }
@@ -303,8 +323,12 @@ export async function updateArtikelPositionKommissionierung(
     }
     // Nur Kommissionierer/Admin darf die Felder ändern
     if (isKommissionierer) {
-      if (data.kommissioniertMenge !== undefined)
-        position.kommissioniertMenge = data.kommissioniertMenge;
+      if (data.kommissioniertMenge !== undefined) {
+        const n = toNumberOrUndefined(data.kommissioniertMenge as any);
+        if (isFiniteNumber(n)) position.kommissioniertMenge = n;
+        else position.kommissioniertMenge = undefined as any;
+      }
+
       if (
         data.kommissioniertEinheit !== undefined &&
         ["kg", "stück", "kiste", "karton"].includes(data.kommissioniertEinheit)
@@ -315,33 +339,60 @@ export async function updateArtikelPositionKommissionierung(
           | "kiste"
           | "karton";
       }
+
       if (data.kommissioniertBemerkung !== undefined)
         position.kommissioniertBemerkung = data.kommissioniertBemerkung;
+
       if (data.kommissioniertAm !== undefined)
         position.kommissioniertAm = data.kommissioniertAm;
-      if (data.bruttogewicht !== undefined)
-        position.bruttogewicht = data.bruttogewicht;
-      if (
-        data.leergut !== undefined &&
-        data.leergut.every(
-          (l) =>
-            typeof l.leergutArt === "string" &&
-            typeof l.leergutAnzahl === "number" &&
-            typeof l.leergutGewicht === "number"
-        )
-      ) {
-        position.leergut = data.leergut;
+
+      // Bruttogewicht: nur setzen, wenn eine gültige Zahl übergeben wurde; leere Strings/null löschen den Wert
+      if (Object.prototype.hasOwnProperty.call(data, 'bruttogewicht')) {
+        const n = toNumberOrUndefined((data as any).bruttogewicht);
+        if (isFiniteNumber(n)) position.bruttogewicht = n;
+        else position.bruttogewicht = undefined as any;
       }
+
+      // Leergut: tolerant parsen; Einträge mit fehlenden Zahlen werden übersprungen
+      if (data.leergut !== undefined && Array.isArray(data.leergut)) {
+        const parsed = data.leergut
+          .map((l) => {
+            const anz = toNumberOrUndefined(l.leergutAnzahl as any);
+            const gew = toNumberOrUndefined(l.leergutGewicht as any);
+            if (!isFiniteNumber(anz) || !isFiniteNumber(gew)) return null;
+            return {
+              leergutArt: String(l.leergutArt || ''),
+              leergutAnzahl: anz,
+              leergutGewicht: gew,
+            };
+          })
+          .filter((x): x is { leergutArt: string; leergutAnzahl: number; leergutGewicht: number } => x !== null);
+
+        position.leergut = parsed;
+      }
+
       if (data.chargennummern !== undefined)
         position.chargennummern = data.chargennummern;
     }
     // Nettogewicht automatisch berechnen
-    if (position.bruttogewicht && position.leergut?.length) {
-      const leerSumme = position.leergut.reduce(
-        (sum, l) => sum + l.leergutAnzahl * l.leergutGewicht,
-        0
-      );
-      position.nettogewicht = position.bruttogewicht - leerSumme;
+    {
+      const brutto = position.bruttogewicht;
+      const hatLeergut = Array.isArray(position.leergut ?? []) && (position.leergut ?? []).length > 0;
+      if (isFiniteNumber(brutto) && hatLeergut) {
+        const leerSumme = (position.leergut ?? []).reduce((sum, l) => {
+          const anz = toNumberOrUndefined((l as any).leergutAnzahl);
+          const gew = toNumberOrUndefined((l as any).leergutGewicht);
+          if (!isFiniteNumber(anz) || !isFiniteNumber(gew)) return sum;
+          return sum + anz * gew;
+        }, 0);
+        position.nettogewicht = brutto - leerSumme;
+      } else if (isFiniteNumber(brutto)) {
+        // Kein Leergut angegeben → Nettogewicht = Brutto
+        position.nettogewicht = brutto;
+      } else {
+        // Kein/ungültiges Bruttogewicht → Nettogewicht entfernen
+        (position as any).nettogewicht = undefined;
+      }
     }
   }
   // Kommissionierung fertig, Kontrolle offen
@@ -351,8 +402,12 @@ export async function updateArtikelPositionKommissionierung(
   ) {
     // Nur Kontrollierer/Admin darf diese Felder ändern
     if (isKontrollierer) {
-      if (data.kommissioniertMenge !== undefined)
-        position.kommissioniertMenge = data.kommissioniertMenge;
+      if (data.kommissioniertMenge !== undefined) {
+        const n = toNumberOrUndefined(data.kommissioniertMenge as any);
+        if (isFiniteNumber(n)) position.kommissioniertMenge = n;
+        else position.kommissioniertMenge = undefined as any;
+      }
+
       if (
         data.kommissioniertEinheit !== undefined &&
         ["kg", "stück", "kiste", "karton"].includes(data.kommissioniertEinheit)
@@ -363,33 +418,60 @@ export async function updateArtikelPositionKommissionierung(
           | "kiste"
           | "karton";
       }
+
       if (data.kommissioniertBemerkung !== undefined)
         position.kommissioniertBemerkung = data.kommissioniertBemerkung;
+
       if (data.kommissioniertAm !== undefined)
         position.kommissioniertAm = data.kommissioniertAm;
-      if (data.bruttogewicht !== undefined)
-        position.bruttogewicht = data.bruttogewicht;
-      if (
-        data.leergut !== undefined &&
-        data.leergut.every(
-          (l) =>
-            typeof l.leergutArt === "string" &&
-            typeof l.leergutAnzahl === "number" &&
-            typeof l.leergutGewicht === "number"
-        )
-      ) {
-        position.leergut = data.leergut;
+
+      // Bruttogewicht: nur setzen, wenn eine gültige Zahl übergeben wurde; leere Strings/null löschen den Wert
+      if (Object.prototype.hasOwnProperty.call(data, 'bruttogewicht')) {
+        const n = toNumberOrUndefined((data as any).bruttogewicht);
+        if (isFiniteNumber(n)) position.bruttogewicht = n;
+        else position.bruttogewicht = undefined as any;
       }
+
+      // Leergut: tolerant parsen; Einträge mit fehlenden Zahlen werden übersprungen
+      if (data.leergut !== undefined && Array.isArray(data.leergut)) {
+        const parsed = data.leergut
+          .map((l) => {
+            const anz = toNumberOrUndefined(l.leergutAnzahl as any);
+            const gew = toNumberOrUndefined(l.leergutGewicht as any);
+            if (!isFiniteNumber(anz) || !isFiniteNumber(gew)) return null;
+            return {
+              leergutArt: String(l.leergutArt || ''),
+              leergutAnzahl: anz,
+              leergutGewicht: gew,
+            };
+          })
+          .filter((x): x is { leergutArt: string; leergutAnzahl: number; leergutGewicht: number } => x !== null);
+
+        position.leergut = parsed;
+      }
+
       if (data.chargennummern !== undefined)
         position.chargennummern = data.chargennummern;
     }
     // Nettogewicht automatisch berechnen
-    if (position.bruttogewicht && position.leergut?.length) {
-      const leerSumme = position.leergut.reduce(
-        (sum, l) => sum + l.leergutAnzahl * l.leergutGewicht,
-        0
-      );
-      position.nettogewicht = position.bruttogewicht - leerSumme;
+    {
+      const brutto = position.bruttogewicht;
+      const hatLeergut = Array.isArray(position.leergut ?? []) && (position.leergut ?? []).length > 0;
+      if (isFiniteNumber(brutto) && hatLeergut) {
+        const leerSumme = (position.leergut ?? []).reduce((sum, l) => {
+          const anz = toNumberOrUndefined((l as any).leergutAnzahl);
+          const gew = toNumberOrUndefined((l as any).leergutGewicht);
+          if (!isFiniteNumber(anz) || !isFiniteNumber(gew)) return sum;
+          return sum + anz * gew;
+        }, 0);
+        position.nettogewicht = brutto - leerSumme;
+      } else if (isFiniteNumber(brutto)) {
+        // Kein Leergut angegeben → Nettogewicht = Brutto
+        position.nettogewicht = brutto;
+      } else {
+        // Kein/ungültiges Bruttogewicht → Nettogewicht entfernen
+        (position as any).nettogewicht = undefined;
+      }
     }
   }
   // In allen anderen Fällen: diese Felder NICHT ändern (ignorieren)
