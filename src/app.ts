@@ -9,6 +9,11 @@ import kundeRouter from './routes/KundeRoutes';
 import verkaeuferRouter from './routes/MitarbeiterRoutes';
 import loginRouter from './routes/LoginRouter';
 import zerlegeRouter from './routes/ZerlegeAuftragRoutes';
+import fahrzeugRouter from './routes/FahrzeugRoutes';
+import regionRuleRouter from './routes/RegionRuleRoutes';
+import reihenfolgeVorlageRouter from './routes/ReihenfolgeVorlageRoutes';
+import tourRouter from './routes/TourRoutes';
+import tourStopRouter from './routes/TourStopRoutes';
 
 const app = express();
 
@@ -39,7 +44,12 @@ app.use("/api/kundenPreis", kundenPreisRouter);
 app.use("/api/kunde", kundeRouter);
 app.use("/api/mitarbeiter", verkaeuferRouter);
 app.use("/api/zerlege", zerlegeRouter);
-app.use("/api/login", loginRouter)
+app.use("/api/login", loginRouter);
+app.use("/api/fahrzeug", fahrzeugRouter);
+app.use("/api/region-rule", regionRuleRouter);
+app.use("/api/reihenfolge-vorlage", reihenfolgeVorlageRouter);
+app.use("/api/tour", tourRouter)
+app.use("/api/tourstop", tourStopRouter)
 
 
 export default app;

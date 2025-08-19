@@ -8,6 +8,8 @@ import { ArtikelPositionResource, AuftragResource } from "../Resources"; // Pfad
 import { getArtikelById } from "../services/ArtikelService";
 import { Mitarbeiter } from "../model/MitarbeiterModel";
 import { Counter } from "../model/CounterModel";
+import { onAuftragLieferdatumSet, onAuftragDatumOderRegionGeaendert, removeAllStopsForAuftrag } from "./tour-hooksService";
+import mongoose from "mongoose";
 
 async function generiereAuftragsnummer(): Promise<string> {
   const counter = await Counter.findOneAndUpdate(
@@ -31,10 +33,14 @@ async function computeTotals(
     _id: { $in: auftrag.artikelPosition },
   });
 
-  const totalWeight = positions.reduce(
-    (sum, pos) => sum + pos.gesamtgewicht,
-    0
-  );
+  const totalWeight = positions.reduce((sum, pos) => {
+    const brutto = (pos as any).bruttogewicht;
+    const gewicht =
+      typeof brutto === "number" && !Number.isNaN(brutto)
+        ? brutto
+        : pos.gesamtgewicht || 0;
+    return sum + gewicht;
+  }, 0);
   const totalPrice = positions.reduce((sum, pos) => sum + pos.gesamtpreis, 0);
 
   return { totalWeight, totalPrice };
@@ -189,54 +195,95 @@ export async function updateAuftrag(
     kontrolliertZeit: string;
   }>
 ): Promise<AuftragResource> {
+
+  // Hilfsfunktion für robusten Date-Vergleich (null-safe)
+  const toDateOrNull = (v: unknown): Date | null => {
+    if (!v) return null;
+    const d = new Date(v as string | number | Date);
+    return isNaN(d.getTime()) ? null : d;
+  };
+  const datesEqual = (a?: Date | null, b?: Date | null) => {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return a.getTime() === b.getTime();
+  };
+
+  // 1) Altes Dokument holen (für Vergleich von lieferdatum + tourId)
+  const prev = await Auftrag.findById(id).select("lieferdatum tourId");
+  if (!prev) throw new Error("Auftrag nicht gefunden");
+
+  const prevLieferdatum: Date | null = prev.lieferdatum ? new Date(prev.lieferdatum) : null;
+  const prevHasTour = !!prev.tourId;
+
+  // 2) Update-Daten bauen
   const updateData: any = {};
   if (data.kunde) updateData.kunde = data.kunde;
   if (data.artikelPosition) updateData.artikelPosition = data.artikelPosition;
   if (data.status) updateData.status = data.status;
-  if (data.lieferdatum) updateData.lieferdatum = new Date(data.lieferdatum);
+
+  if (data.lieferdatum !== undefined) {
+    const parsed = toDateOrNull(data.lieferdatum);
+    if (!parsed) throw new Error("Ungültiges Lieferdatum");
+    updateData.lieferdatum = parsed;
+  }
+
   if (data.bemerkungen !== undefined) updateData.bemerkungen = data.bemerkungen;
   if (data.bearbeiter !== undefined) updateData.bearbeiter = data.bearbeiter;
-  if (data.gesamtPaletten !== undefined)
-    updateData.gesamtPaletten = data.gesamtPaletten;
-  if (data.gesamtBoxen !== undefined) 
-    updateData.gesamtBoxen = data.gesamtBoxen;
-  if (data.kommissioniertVon !== undefined)
-    updateData.kommissioniertVon = data.kommissioniertVon;
-  if (data.kontrolliertVon !== undefined)
-    updateData.kontrolliertVon = data.kontrolliertVon;
-  if (data.kommissioniertStatus !== undefined)
-    updateData.kommissioniertStatus = data.kommissioniertStatus;
-  if (data.kontrolliertStatus !== undefined)
-    updateData.kontrolliertStatus = data.kontrolliertStatus;
-  if (data.kommissioniertStartzeit)
-    updateData.kommissioniertStartzeit = new Date(data.kommissioniertStartzeit);
-  if (data.kommissioniertEndzeit)
-    updateData.kommissioniertEndzeit = new Date(data.kommissioniertEndzeit);
-  if (data.kontrolliertZeit)
-    updateData.kontrolliertZeit = new Date(data.kontrolliertZeit);
+  if (data.gesamtPaletten !== undefined) updateData.gesamtPaletten = data.gesamtPaletten;
+  if (data.gesamtBoxen !== undefined) updateData.gesamtBoxen = data.gesamtBoxen;
+  if (data.kommissioniertVon !== undefined) updateData.kommissioniertVon = data.kommissioniertVon;
+  if (data.kontrolliertVon !== undefined) updateData.kontrolliertVon = data.kontrolliertVon;
+  if (data.kommissioniertStatus !== undefined) updateData.kommissioniertStatus = data.kommissioniertStatus;
+  if (data.kontrolliertStatus !== undefined) updateData.kontrolliertStatus = data.kontrolliertStatus;
 
-  // Falls kommissioniertVon gesetzt wurde, hole kommissioniertVonName
+  if (data.kommissioniertStartzeit)
+    updateData.kommissioniertStartzeit = toDateOrNull(data.kommissioniertStartzeit);
+  if (data.kommissioniertEndzeit)
+    updateData.kommissioniertEndzeit = toDateOrNull(data.kommissioniertEndzeit);
+  if (data.kontrolliertZeit)
+    updateData.kontrolliertZeit = toDateOrNull(data.kontrolliertZeit);
+
+  // 3) kommissioniert/kontrolliert Namen auflösen
   if (data.kommissioniertVon) {
     const mitarbeiter = await Mitarbeiter.findById(data.kommissioniertVon);
-    if (mitarbeiter) {
-      updateData.kommissioniertVonName = mitarbeiter.name;
-    }
+    if (mitarbeiter) updateData.kommissioniertVonName = mitarbeiter.name;
   }
-
-  // Falls kontrolliertVon gesetzt wurde, hole kontrolliertVonName
   if (data.kontrolliertVon) {
     const mitarbeiter = await Mitarbeiter.findById(data.kontrolliertVon);
-    if (mitarbeiter) {
-      updateData.kontrolliertVonName = mitarbeiter.name;
-    }
+    if (mitarbeiter) updateData.kontrolliertVonName = mitarbeiter.name;
   }
 
+  // 4) Update ausführen
   const updatedAuftrag = await Auftrag.findByIdAndUpdate(id, updateData, {
     new: true,
   }).populate("kunde", "name");
-  if (!updatedAuftrag) {
-    throw new Error("Auftrag nicht gefunden");
+  if (!updatedAuftrag) throw new Error("Auftrag nicht gefunden (nach Update)");
+
+  // 5) Hooks abhängig von Lieferdatums-Änderung & tourId-Zustand
+  const newLieferdatum: Date | null = updatedAuftrag.lieferdatum ? new Date(updatedAuftrag.lieferdatum) : null;
+  const lieferdatumWurdeGeaendert =
+    data.lieferdatum !== undefined && !datesEqual(prevLieferdatum, newLieferdatum);
+
+  if (lieferdatumWurdeGeaendert) {
+    try {
+      if (!prevHasTour) {
+        // Falls es vorher KEINE Tour gab → Standard-Erstzuordnung
+        await onAuftragLieferdatumSet(updatedAuftrag._id.toString());
+      } else {
+        // Wenn schon eine Tour vorhanden war → Datum/Region-Änderungslogik
+        // (Signatur ggf. anpassen, falls deine Funktion mehr Parameter erwartet)
+        await onAuftragDatumOderRegionGeaendert(updatedAuftrag._id.toString());
+      }
+    } catch (err) {
+      // Update soll nicht an Hook-Fehler scheitern
+      console.error(
+        "[updateAuftrag] Tour-Hook fehlgeschlagen:",
+        (err as Error)?.message
+      );
+    }
   }
+
+  // 6) Totals & Rückgabe
   const totals = await computeTotals(updatedAuftrag);
   return convertAuftragToResource(updatedAuftrag, totals);
 }
@@ -311,50 +358,67 @@ export async function getLetzterArtikelFromAuftragByKundenId(
   return artikelIds;
 }
 
-/**
- * Löscht einen Auftrag anhand der ID.
- */
 export async function deleteAuftrag(id: string): Promise<void> {
-  const deleted = await Auftrag.findByIdAndDelete(id);
-  if (!deleted) {
-    throw new Error("Auftrag nicht gefunden");
-  }
-  // Alle zugehörigen ArtikelPositionen löschen
-  const artikelPositionen = deleted.artikelPosition;
-  if (artikelPositionen && artikelPositionen.length > 0) {
-    await ArtikelPosition.deleteMany({ _id: { $in: artikelPositionen } });
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const auftrag = await Auftrag.findById(id).session(session);
+      if (!auftrag) throw new Error("Auftrag nicht gefunden");
 
-    // Alle Zerlegeaufträge mit mindestens einer dieser ArtikelPositionen löschen
-    await ZerlegeAuftragModel.deleteMany({
-      "artikelPositionen.artikelPositionId": { $in: artikelPositionen },
+      // 1) TourStops entfernen & Touren pflegen
+      await removeAllStopsForAuftrag(auftrag._id, session);
+
+      // 2) ArtikelPositionen + Zerlegeaufträge löschen
+      const artikelPositionen = auftrag.artikelPosition ?? [];
+      if (artikelPositionen.length > 0) {
+        await ArtikelPosition.deleteMany({ _id: { $in: artikelPositionen } }).session(session);
+        await ZerlegeAuftragModel.deleteMany({
+          "artikelPositionen.artikelPositionId": { $in: artikelPositionen },
+        }).session(session);
+      }
+
+      // 3) Auftrag löschen
+      await Auftrag.deleteOne({ _id: auftrag._id }).session(session);
     });
+  } finally {
+    await session.endSession();
   }
 }
 
 /**
- * Löscht alle Aufträge und die dazugehörigen ArtikelPositionen.
+ * Löscht alle Aufträge samt abhängiger ArtikelPositionen, TourStops
+ * und ggf. leer gewordener Touren.
  */
 export async function deleteAllAuftraege(): Promise<void> {
-  // Alle Aufträge laden
-  const auftraege = await Auftrag.find();
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const auftraege = await Auftrag.find().select("_id artikelPosition").session(session);
+      if (!auftraege.length) {
+        await Auftrag.deleteMany({}).session(session);
+        return;
+      }
 
-  // Sammle alle ArtikelPosition-IDs
-  const alleArtikelPositionen = auftraege.flatMap(
-    (auftrag) => auftrag.artikelPosition
-  );
+      // 1) TourStops/ Touren je Auftrag entfernen/pflegen
+      for (const a of auftraege) {
+        await removeAllStopsForAuftrag(a._id, session);
+      }
 
-  // Lösche alle ArtikelPositionen
-  if (alleArtikelPositionen.length > 0) {
-    await ArtikelPosition.deleteMany({ _id: { $in: alleArtikelPositionen } });
+      // 2) Alle ArtikelPositionen und Zerlegeaufträge löschen (batch)
+      const alleArtikelPositionen = auftraege.flatMap((a) => a.artikelPosition ?? []);
+      if (alleArtikelPositionen.length > 0) {
+        await ArtikelPosition.deleteMany({ _id: { $in: alleArtikelPositionen } }).session(session);
+        await ZerlegeAuftragModel.deleteMany({
+          "artikelPositionen.artikelPositionId": { $in: alleArtikelPositionen },
+        }).session(session);
+      }
 
-    // Alle Zerlegeaufträge mit mindestens einer dieser ArtikelPositionen löschen
-    await ZerlegeAuftragModel.deleteMany({
-      "artikelPositionen.artikelPositionId": { $in: alleArtikelPositionen },
+      // 3) Alle Aufträge löschen
+      await Auftrag.deleteMany({}).session(session);
     });
+  } finally {
+    await session.endSession();
   }
-
-  // Lösche alle Aufträge
-  await Auftrag.deleteMany({});
 }
 /**
  * Gibt alle Aufträge mit Status "in Bearbeitung" zurück.

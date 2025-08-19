@@ -73,6 +73,8 @@ export type AuftragResource = {
   kontrolliertZeit?: string;
   createdAt?: string;
   updatedAt?: string;
+  tourId?: string;
+  tourStopId?: string;
 };
 
 export type ArtikelPositionResource = {
@@ -152,4 +154,107 @@ export type ZerlegeauftragResource = {
   zerlegerName?: string;
   erstelltAm: string;
   archiviert: boolean;
+};
+
+// ===== Tourplanung: Enums & neue Ressourcen =====
+
+export type TourStatus = "geplant" | "laufend" | "abgeschlossen" | "archiviert";
+export type StopStatus = "offen" | "unterwegs" | "zugestellt" | "teilweise" | "fehlgeschlagen";
+
+export type FehlgrundEnum =
+  | "KUNDE_NICHT_ERREICHBAR"
+  | "ANNAHME_VERWEIGERT"
+  | "FALSCH_ADRESSE"
+  | "NICHT_RECHTZEITIG"
+  | "WARE_BESCHAEDIGT"
+  | "SONSTIGES";
+
+export type FahrzeugResource = {
+  id?: string;
+  kennzeichen: string;
+  name?: string;
+  maxGewichtKg: number;
+  aktiv: boolean;
+  regionen?: string[];        // optionale Einsatzgebiete (Freitext)
+  samsaraVehicleId?: string;  // optionales Mapping zu Samsara
+  bemerkung?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TourResource = {
+  id?: string;
+  datum: Date;              
+  region: string;             // Freitext (normalisiert)
+  name?: string;              // z. B. "Berlin #2"
+  fahrzeugId?: string;        // Verweis auf FahrzeugResource.id
+  fahrerId?: string;          // Verweis auf MitarbeiterResource.id (rolle: "fahrer")
+  maxGewichtKg?: number;      // wenn leer -> vom Fahrzeug übernehmen (UI-Anzeige)
+  belegtesGewichtKg: number;  // vom Server berechnet
+  status: TourStatus;
+  reihenfolgeVorlageId?: string;
+  isStandard?: boolean;       // Vorschlagstour pro Tag/Region
+  overCapacityFlag?: boolean; // nur für UI-Warnung (kein Server-Block)
+  parentTourId?: string;      // bei Tour-Split: Parent-Verweis
+  splitIndex?: number;        // 1..N (Sortierhilfe bei Splits)
+  archiviertAm?: string;      // gesetzt bei Archivierung
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TourStopResource = {
+  id?: string;
+  tourId: string;             // Verweis auf TourResource.id
+  auftragId: string;          // Verweis auf AuftragResource.id (1 Auftrag = 1 Stop)
+  kundeId: string;            // denormalisiert für schnelle Customer-Sicht
+  kundeName?: string;
+  position: number;           // Reihenfolge in der Tour (1..n)
+  gewichtKg?: number;         // Summe aus Auftrag (Fallback)
+  status: StopStatus;
+  fehlgrund?: {               // Katalog + Freitext
+    code?: FehlgrundEnum;
+    text?: string;
+  };
+  // Rechtlich relevanter Zustellnachweis (ohne Fotos):
+  signaturPngBase64?: string; // digitale Unterschrift als Base64-PNG
+  signTimestampUtc?: string;  // Server-Zeitstempel (UTC)
+  signedByName?: string;      // Name des Unterzeichners (Freitext)
+
+  // Leergut-Mitnahme auf Stop-Ebene (separat von artikelbezogenem Leergut):
+  leergutMitnahme?: {
+    art: string;
+    anzahl: number;
+    gewichtKg?: number;
+  }[];
+
+  abgeschlossenAm?: string;
+  updatedAt?: string;
+};
+
+export type ReihenfolgeVorlageResource = {
+  id?: string;
+  region: string;             // Freitext
+  name: string;               // z. B. "Berlin Nord-Ost"
+  kundenIdsInReihenfolge: string[]; // Kunden-IDs in fixierter Reihenfolge
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type RegionRuleResource = {
+  id?: string;
+  region: string;             // Freitext, wie in KundeResource.region
+  allowedWeekdays: number[];  // 1=Mo ... 7=So
+  orderCutoff?: string;       // "HH:mm" (Europe/Berlin)
+  exceptionDates?: string[];  // ISO YYYY-MM-DD
+  isActive: boolean;
+};
+
+export type TourSplitLog = {
+  id?: string;
+  parentTourId: string;
+  childTourIds: string[];
+  createdAt: string;
+  createdBy: string;          // Mitarbeiter-ID
+  mode: "plz_bucket" | "capacity" | "round_robin";
+  note?: string;
 };
