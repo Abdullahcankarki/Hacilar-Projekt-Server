@@ -2,12 +2,13 @@
   "name": "Hacilar-App-Server",
   "version": "0.0.1",
   "description": "Server for the Hacilar-Web-Applikation",
-  "scripts": {
-    "test": "jest --runInBand",
-    "build": "tsc",
-    "clean": "rimraf dist coverage junit.xml abgabe*.zip all.log",
-    "start": "nodemon -e ts,js --exec \"node --inspect --require ts-node/register src/index.ts\""
-  },
+"scripts": {
+  "test": "jest --runInBand",
+  "clean": "rimraf dist coverage junit.xml abgabe*.zip all.log",
+  "build": "tsc -p tsconfig.json",
+  "start": "node dist/index.js",
+  "start:dev": "nodemon -e ts,js --exec \"ts-node src/index.ts\""
+},
   "author": "",
   "devDependencies": {
     "@types/bcryptjs": "^2.4.3",
@@ -49,5 +50,16 @@
     "mongoose": "^7.5.0",
     "serialport": "^13.0.0",
     "winston": "^3.10.0"
-  }
+  },
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "commonjs",
+    "target": "es2019",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": false
+  },
+  "include": ["src"]
 }
