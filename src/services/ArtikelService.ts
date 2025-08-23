@@ -4,6 +4,28 @@ import { ArtikelResource } from '../Resources';    // Pfad ggf. anpassen
 import { getKundenPreis } from './KundenPreisService';
 import { Types } from 'mongoose';
 
+// Helper: Robust mapping from a Mongo/Mongoose document (lean or hydrated) to ArtikelResource
+function mapToArtikelResource(
+  artikel: any,
+  aufpreis: number = 0
+): ArtikelResource {
+  // Support both hydrated documents and lean objects
+  const id = artikel._id?.toString ? artikel._id.toString() : String(artikel._id);
+  return {
+    id,
+    preis: (artikel.preis ?? 0) + aufpreis,
+    artikelNummer: artikel.artikelNummer,
+    name: artikel.name,
+    kategorie: artikel.kategorie,
+    gewichtProStueck: artikel.gewichtProStueck,
+    gewichtProKarton: artikel.gewichtProKarton,
+    gewichtProKiste: artikel.gewichtProKiste,
+    bildUrl: artikel.bildUrl,
+    ausverkauft: artikel.ausverkauft,
+    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT',
+  };
+}
+
 /**
  * Erstellt einen neuen Artikel.
  */
@@ -32,19 +54,7 @@ export async function createArtikel(data: {
     erfassungsModus: data.erfassungsModus ?? 'GEWICHT'
   });
   const saved = await newArtikel.save();
-  return {
-    id: saved._id.toString(),
-    preis: saved.preis,
-    artikelNummer: saved.artikelNummer,
-    name: saved.name,
-    kategorie: saved.kategorie,
-    gewichtProStueck: saved.gewichtProStueck,
-    gewichtProKarton: saved.gewichtProKarton,
-    gewichtProKiste: saved.gewichtProKiste,
-    bildUrl: saved.bildUrl,
-    ausverkauft: saved.ausverkauft,
-    erfassungsModus: saved.erfassungsModus ?? 'GEWICHT',
-  };
+  return mapToArtikelResource(saved);
 }
 
 /**
@@ -54,86 +64,88 @@ export async function getArtikelById(
   id: string,
   customerId?: string
 ): Promise<ArtikelResource> {
-  const artikel = await ArtikelModel.findById(id);
+  const artikel = await ArtikelModel.findById(id).lean();
   if (!artikel) {
     throw new Error('Artikel nicht gefunden');
   }
 
-  // Basispreis
-  let preis = artikel.preis;
-
-  // Kundenaufschlag abrufen, falls customerId vorhanden
+  let kundenPreis: { aufpreis: number } | null = null;
   if (customerId) {
-    const kundenPreis = await getKundenPreis(customerId, id);
-    if (kundenPreis) {
-      preis += kundenPreis.aufpreis;
-    }
+    kundenPreis = await getKundenPreis(customerId, id);
   }
-
-  return {
-    id: artikel._id.toString(),
-    preis,
-    artikelNummer: artikel.artikelNummer,
-    name: artikel.name,
-    kategorie: artikel.kategorie,
-    gewichtProStueck: artikel.gewichtProStueck,
-    gewichtProKarton: artikel.gewichtProKarton,
-    gewichtProKiste: artikel.gewichtProKiste,
-    bildUrl: artikel.bildUrl,
-    ausverkauft: artikel.ausverkauft,
-    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT',
-  };
+  return mapToArtikelResource(artikel, kundenPreis?.aufpreis ?? 0);
 }
 
 /**
  * Ruft alle Artikel ab.
  */
-export async function getAllArtikel(customerId?: string): Promise<ArtikelResource[]> {
-  // 1. Alle Artikel laden
-  const artikelList = await ArtikelModel.find();
+export async function getAllArtikel(
+  customerId?: string,
+  options?: {
+    page?: number;
+    limit?: number;
+    kategorie?: string | string[];
+    ausverkauft?: boolean;
+    name?: string; // substring filter (case-insensitive)
+    erfassungsModus?: string | string[];
+  }
+): Promise<{ items: ArtikelResource[]; page: number; limit: number; total: number; pages: number; }> {
+  const page = Math.max(1, options?.page ?? 1);
 
-  // 2. Wenn kein Kunde angegeben ist, einfach Artikel ohne Aufpreis zurückgeben
-  if (!customerId) {
-    return artikelList.map(artikel => ({
-      id: artikel._id.toString(),
-      preis: artikel.preis,
-      artikelNummer: artikel.artikelNummer,
-      name: artikel.name,
-      kategorie: artikel.kategorie,
-      gewichtProStueck: artikel.gewichtProStueck,
-      gewichtProKarton: artikel.gewichtProKarton,
-      gewichtProKiste: artikel.gewichtProKiste,
-      bildUrl: artikel.bildUrl,
-      ausverkauft: artikel.ausverkauft,
-      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
-    }));
+  // Build filter
+  const query: any = {};
+  if (options?.kategorie) {
+    query.kategorie = Array.isArray(options.kategorie)
+      ? { $in: options.kategorie }
+      : options.kategorie;
+  }
+  if (typeof options?.ausverkauft === 'boolean') {
+    query.ausverkauft = options.ausverkauft;
+  }
+  if (options?.erfassungsModus) {
+    query.erfassungsModus = Array.isArray(options.erfassungsModus)
+      ? { $in: options.erfassungsModus }
+      : options.erfassungsModus;
+  }
+  if (options?.name && options.name.trim().length > 0) {
+    query.name = { $regex: options.name.trim(), $options: 'i' };
   }
 
-  // 3. Alle Kundenpreise für den Kunden in einem Schritt laden
-  const kundenPreise = await KundenPreisModel.find({ customer: new Types.ObjectId(customerId) });
+  const totalDocsAll = await ArtikelModel.estimatedDocumentCount();
+  const limit = options?.limit !== undefined
+    ? Math.max(1, Math.min(200, options.limit))
+    : totalDocsAll;
+  const total = await ArtikelModel.countDocuments(query);
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const skip = (page - 1) * limit;
 
-  // 4. Map zur schnellen Zuordnung: artikelId (als String) => aufpreis
-  const preisMap = new Map<string, number>(
-    kundenPreise.map(p => [p.artikel.toHexString(), p.aufpreis])
-  );
+  const artikelList = await ArtikelModel.find(query)
+    .collation({ locale: 'de', strength: 2 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
 
-  // 5. Artikel + Aufpreis kombinieren
-  return artikelList.map(artikel => {
-    const aufpreis = preisMap.get(artikel._id.toHexString()) || 0;
-    return {
-      id: artikel._id.toString(),
-      preis: artikel.preis + aufpreis,
-      artikelNummer: artikel.artikelNummer,
-      name: artikel.name,
-      kategorie: artikel.kategorie,
-      gewichtProStueck: artikel.gewichtProStueck,
-      gewichtProKarton: artikel.gewichtProKarton,
-      gewichtProKiste: artikel.gewichtProKiste,
-      bildUrl: artikel.bildUrl,
-      ausverkauft: artikel.ausverkauft,
-      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
-    };
-  });
+  let items: ArtikelResource[];
+
+  if (!customerId) {
+    items = artikelList.map(a => mapToArtikelResource(a));
+  } else {
+    const kundenPreise = await KundenPreisModel.find({
+      customer: new Types.ObjectId(customerId),
+      artikel: { $in: artikelList.map(a => a._id) },
+    }).lean();
+
+    const preisMap = new Map<string, number>(
+      kundenPreise.map(p => [p.artikel.toHexString(), p.aufpreis])
+    );
+
+    items = artikelList.map(a => {
+      const aufpreis = preisMap.get(a._id.toString()) || 0;
+      return mapToArtikelResource(a, aufpreis);
+    });
+  }
+
+  return { items, page, limit, total, pages };
 }
 
 /**
@@ -142,54 +154,66 @@ export async function getAllArtikel(customerId?: string): Promise<ArtikelResourc
 
 export async function getArtikelByIdClean(
   id: string,
-  customerId?: string
+  _customerId?: string
 ): Promise<ArtikelResource> {
-  const artikel = await ArtikelModel.findById(id);
+  const artikel = await ArtikelModel.findById(id).lean();
   if (!artikel) {
     throw new Error('Artikel nicht gefunden');
   }
 
-  return {
-    id: artikel._id.toString(),
-    preis: artikel.preis,
-    artikelNummer: artikel.artikelNummer,
-    name: artikel.name,
-    kategorie: artikel.kategorie,
-    gewichtProStueck: artikel.gewichtProStueck,
-    gewichtProKarton: artikel.gewichtProKarton,
-    gewichtProKiste: artikel.gewichtProKiste,
-    bildUrl: artikel.bildUrl,
-    ausverkauft: artikel.ausverkauft,
-    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
-  };
+  return mapToArtikelResource(artikel);
 }
 
 /**
  * Ruft alle Artikel ab.
  */
-export async function getAllArtikelClean(): Promise<ArtikelResource[]> {
-  const artikelList = await ArtikelModel.find();
+export async function getAllArtikelClean(
+  options?: {
+    page?: number;
+    limit?: number;
+    kategorie?: string | string[];
+    ausverkauft?: boolean;
+    name?: string; // substring filter (case-insensitive)
+    erfassungsModus?: string | string[];
+  }
+): Promise<{ items: ArtikelResource[]; page: number; limit: number; total: number; pages: number; }> {
+  const page = Math.max(1, options?.page ?? 1);
+  
+  const totalDocsAll = await ArtikelModel.estimatedDocumentCount();
+  const limit = options?.limit !== undefined
+    ? Math.max(1, Math.min(200, options.limit))
+    : totalDocsAll;
 
-  const result: ArtikelResource[] = [];
-
-  for (const artikel of artikelList) {
-
-    result.push({
-      id: artikel._id.toString(),
-      preis: artikel.preis,
-      artikelNummer: artikel.artikelNummer,
-      name: artikel.name,
-      kategorie: artikel.kategorie,
-      gewichtProStueck: artikel.gewichtProStueck,
-      gewichtProKarton: artikel.gewichtProKarton,
-      gewichtProKiste: artikel.gewichtProKiste,
-      bildUrl: artikel.bildUrl,
-      ausverkauft: artikel.ausverkauft,
-      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
-    });
+  const query: any = {};
+  if (options?.kategorie) {
+    query.kategorie = Array.isArray(options.kategorie)
+      ? { $in: options.kategorie }
+      : options.kategorie;
+  }
+  if (typeof options?.ausverkauft === 'boolean') {
+    query.ausverkauft = options.ausverkauft;
+  }
+  if (options?.erfassungsModus) {
+    query.erfassungsModus = Array.isArray(options.erfassungsModus)
+      ? { $in: options.erfassungsModus }
+      : options.erfassungsModus;
+  }
+  if (options?.name && options.name.trim().length > 0) {
+    query.name = { $regex: options.name.trim(), $options: 'i' };
   }
 
-  return result;
+  const total = await ArtikelModel.countDocuments(query);
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const skip = (page - 1) * limit;
+
+  const artikelList = await ArtikelModel.find(query)
+    .collation({ locale: 'de', strength: 2 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const items = artikelList.map(a => mapToArtikelResource(a));
+  return { items, page, limit, total, pages };
 }
 
 /**
@@ -200,30 +224,20 @@ export async function getArtikelByNames(
   customerId?: string
 ): Promise<ArtikelResource[]> {
   // 1. Artikel anhand der Namen finden
-  const artikelList = await ArtikelModel.find({ name: { $in: names } });
+  const artikelList = await ArtikelModel.find({ name: { $in: names } })
+    .collation({ locale: 'de', strength: 2 })
+    .lean();
 
   // 2. Wenn kein Kunde angegeben ist, einfach Artikel ohne Aufpreis zurückgeben
   if (!customerId) {
-    return artikelList.map(artikel => ({
-      id: artikel._id.toString(),
-      preis: artikel.preis,
-      artikelNummer: artikel.artikelNummer,
-      name: artikel.name,
-      kategorie: artikel.kategorie,
-      gewichtProStueck: artikel.gewichtProStueck,
-      gewichtProKarton: artikel.gewichtProKarton,
-      gewichtProKiste: artikel.gewichtProKiste,
-      bildUrl: artikel.bildUrl,
-      ausverkauft: artikel.ausverkauft,
-      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
-    }));
+    return artikelList.map(a => mapToArtikelResource(a));
   }
 
   // 3. Alle Kundenpreise für diese Artikel laden
   const kundenPreise = await KundenPreisModel.find({
     customer: new Types.ObjectId(customerId),
     artikel: { $in: artikelList.map(a => a._id) },
-  });
+  }).lean();
 
   // 4. Map zur schnellen Zuordnung
   const preisMap = new Map<string, number>(
@@ -231,21 +245,9 @@ export async function getArtikelByNames(
   );
 
   // 5. Ergebnis zusammenbauen
-  return artikelList.map(artikel => {
-    const aufpreis = preisMap.get(artikel._id.toHexString()) || 0;
-    return {
-      id: artikel._id.toString(),
-      preis: artikel.preis + aufpreis,
-      artikelNummer: artikel.artikelNummer,
-      name: artikel.name,
-      kategorie: artikel.kategorie,
-      gewichtProStueck: artikel.gewichtProStueck,
-      gewichtProKarton: artikel.gewichtProKarton,
-      gewichtProKiste: artikel.gewichtProKiste,
-      bildUrl: artikel.bildUrl,
-      ausverkauft: artikel.ausverkauft,
-      erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
-    };
+  return artikelList.map(a => {
+    const aufpreis = preisMap.get(a._id.toString()) || 0;
+    return mapToArtikelResource(a, aufpreis);
   });
 }
 
@@ -267,23 +269,11 @@ export async function updateArtikel(
     erfassungsModus?: string;
   }>
 ): Promise<ArtikelResource> {
-  const updated = await ArtikelModel.findByIdAndUpdate(id, data, { new: true });
+  const updated = await ArtikelModel.findByIdAndUpdate(id, data, { new: true, runValidators: true });
   if (!updated) {
     throw new Error('Artikel nicht gefunden');
   }
-  return {
-    id: updated._id.toString(),
-    preis: updated.preis,
-    artikelNummer: updated.artikelNummer,
-    name: updated.name,
-    kategorie: updated.kategorie,
-    gewichtProStueck: updated.gewichtProStueck,
-    gewichtProKarton: updated.gewichtProKarton,
-    gewichtProKiste: updated.gewichtProKiste,
-    bildUrl: updated.bildUrl,
-    ausverkauft: updated.ausverkauft,
-    erfassungsModus: updated.erfassungsModus ?? 'GEWICHT'
-  };
+  return mapToArtikelResource(updated);
 }
 
 /**

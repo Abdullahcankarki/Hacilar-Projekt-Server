@@ -13,6 +13,8 @@ import {
   addKundenFavorit,
   removeKundenFavorit,
   getUnapprovedKunden,
+  normalizeKundenEmails,
+  approveKunde,
 } from '../services/KundeService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -113,7 +115,31 @@ kundeRouter.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const currentUser = req.user as LoginResource;
-      const result = await getAllKunden(currentUser);
+
+      const page = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+      const search = req.query.search ? String(req.query.search) : undefined;
+      const region = req.query.region ? String(req.query.region) : undefined;
+      let isApproved: boolean | undefined = undefined;
+      if (typeof req.query.isApproved === 'string') {
+        const v = req.query.isApproved.toLowerCase();
+        isApproved = v === 'true' || v === '1' || v === 'yes';
+      } else if (Array.isArray(req.query.isApproved)) {
+        const first = String(req.query.isApproved[0] ?? '').toLowerCase();
+        isApproved = first === 'true' || first === '1' || first === 'yes';
+      }
+      const sortBy = req.query.sortBy ? String(req.query.sortBy) : undefined;
+
+      const params = {
+        page,
+        limit,
+        search,
+        region,
+        isApproved,
+        sortBy,
+      };
+
+      const result = await getAllKunden(params, currentUser);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -155,6 +181,27 @@ kundeRouter.get(
   }
 );
 
+// PATCH /kunden/:id/approve
+// Admin: Kunde freischalten/sperren
+kundeRouter.patch(
+  '/:id/approve',
+  authenticate,
+  [
+    param('id').isMongoId().withMessage('Ungültige ID'),
+    body('isApproved').isBoolean().toBoolean(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user as LoginResource;
+      const result = await approveKunde(req.params.id, req.body.isApproved, currentUser);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 // PUT /kunden/:id
 // Aktualisiert einen Kunden – Admin oder der Kunde selbst
 kundeRouter.put(
@@ -177,7 +224,7 @@ kundeRouter.put(
     body('kategorie').optional().isString().trim(),
     body('gewerbeDateiUrl').optional().isString().trim(),
     body('zusatzDateiUrl').optional().isString().trim(),
-    body('isApproved').optional().isBoolean().trim(),
+    body('isApproved').optional().isBoolean().toBoolean(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
@@ -260,6 +307,27 @@ kundeRouter.delete(
       const currentUser = req.user!;
       await removeKundenFavorit(req.params.id, req.params.artikelId, currentUser);
       res.json({ message: 'Artikel entfernt' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /kunden/normalize-emails
+// Normalisiert alle Kunden-E-Mails (nur Admin)
+kundeRouter.patch(
+  '/normalize-emails',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user as LoginResource;
+      if (!currentUser.role.includes("admin")) {
+        return res.status(403).json({ error: 'Nur Admins dürfen diese Aktion durchführen' });
+      }
+
+      // Service aufrufen
+      const count = await normalizeKundenEmails();
+      res.json({ message: `E-Mail-Adressen normalisiert: ${count}` });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

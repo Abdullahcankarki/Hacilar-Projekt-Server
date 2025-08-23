@@ -54,9 +54,81 @@ const validate = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
+// Helpers: Query-Parsing
+const parseBool = (v: any): boolean | undefined => {
+  if (v === undefined) return undefined;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') {
+    const s = v.toLowerCase();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+  }
+  return undefined;
+};
+
+const parseList = (v: any): string | string[] | undefined => {
+  if (v === undefined) return undefined;
+  if (Array.isArray(v)) return v.filter(Boolean).map(String);
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    if (!trimmed) return undefined;
+    return trimmed.includes(',') ? trimmed.split(',').map(s => s.trim()).filter(Boolean) : trimmed;
+  }
+  return undefined;
+};
+
 /* -------------------------------
    Routen für Artikel
 ---------------------------------*/
+
+
+/**
+ * POST /artikel
+ * Erstellt einen neuen Artikel.
+ * Nur Admins dürfen diesen Endpunkt nutzen.
+ */
+artikelRouter.post(
+  '/',
+  authenticate,
+  isAdmin,
+  [
+    body('preis')
+      .isNumeric()
+      .withMessage('Preis muss eine Zahl sein'),
+    body('artikelNummer')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('Artikelnummer ist erforderlich'),
+    body('name')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('Artikelnummer ist erforderlich'),
+    body('gewichtProStueck')
+      .optional()
+      .isNumeric()
+      .withMessage('Gewicht pro Stück muss eine Zahl sein'),
+    body('gewichtProKarton')
+      .optional()
+      .isNumeric()
+      .withMessage('Gewicht pro Karton muss eine Zahl sein'),
+    body('gewichtProKiste')
+      .optional()
+      .isNumeric()
+      .withMessage('Gewicht pro Kiste muss eine Zahl sein'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await createArtikel(req.body);
+      res.status(201).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 
 /**
  * GET /artikel/auswahl
@@ -146,62 +218,31 @@ artikelRouter.get(
 );
 
 /**
- * POST /artikel
- * Erstellt einen neuen Artikel.
- * Nur Admins dürfen diesen Endpunkt nutzen.
- */
-artikelRouter.post(
-  '/',
-  authenticate,
-  isAdmin,
-  [
-    body('preis')
-      .isNumeric()
-      .withMessage('Preis muss eine Zahl sein'),
-    body('artikelNummer')
-      .isString()
-      .trim()
-      .notEmpty()
-      .withMessage('Artikelnummer ist erforderlich'),
-    body('name')
-      .isString()
-      .trim()
-      .notEmpty()
-      .withMessage('Artikelnummer ist erforderlich'),
-    body('gewichtProStueck')
-      .optional()
-      .isNumeric()
-      .withMessage('Gewicht pro Stück muss eine Zahl sein'),
-    body('gewichtProKarton')
-      .optional()
-      .isNumeric()
-      .withMessage('Gewicht pro Karton muss eine Zahl sein'),
-    body('gewichtProKiste')
-      .optional()
-      .isNumeric()
-      .withMessage('Gewicht pro Kiste muss eine Zahl sein'),
-  ],
-  validate,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const result = await createArtikel(req.body);
-      res.status(201).json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  }
-);
-
-/**
  * GET /artikel
  * Ruft alle Artikel ab.
  * Optional: Admins können `?kunde=...` übergeben.
+ * Query-Parameter: page, limit, kategorie (string|string[]|comma), ausverkauft (boolean), name (string), erfassungsModus (string|string[]|comma)
  */
 artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const isAdminUser = req.user?.role.includes('admin');
     const kundeId = isAdminUser ? req.query.kunde?.toString() ?? req.user?.id : req.user?.id;
-    const result = await getAllArtikel(kundeId);
+
+    const page = req.query.page ? parseInt(String(req.query.page), 10) : undefined;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+    const kategorie = parseList(req.query.kategorie);
+    const ausverkauft = parseBool(req.query.ausverkauft);
+    const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+    const erfassungsModus = parseList(req.query.erfassungsModus);
+
+    const result = await getAllArtikel(kundeId, {
+      page,
+      limit,
+      kategorie: kategorie as any,
+      ausverkauft,
+      name,
+      erfassungsModus: erfassungsModus as any,
+    });
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -211,10 +252,25 @@ artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => 
 /**
  * GET /artikel/clean
  * Ruft alle Artikel ab.
+ * Query-Parameter: page, limit, kategorie (string|string[]|comma), ausverkauft (boolean), name (string), erfassungsModus (string|string[]|comma)
  */
 artikelRouter.get('/clean', authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const result = await getAllArtikelClean();
+    const page = req.query.page ? parseInt(String(req.query.page), 10) : undefined;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+    const kategorie = parseList(req.query.kategorie);
+    const ausverkauft = parseBool(req.query.ausverkauft);
+    const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+    const erfassungsModus = parseList(req.query.erfassungsModus);
+
+    const result = await getAllArtikelClean({
+      page,
+      limit,
+      kategorie: kategorie as any,
+      ausverkauft,
+      name,
+      erfassungsModus: erfassungsModus as any,
+    });
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });

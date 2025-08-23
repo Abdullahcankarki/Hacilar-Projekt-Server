@@ -138,13 +138,12 @@ artikelPositionRouter.get(
       ? req.query.kunde?.toString() ?? req.user?.id
       : req.user?.id;
     if (!req.user) return res.status(401).json({ error: "Unauthenticated" });
-    const [artikel, kundenPreis, kunden] = await Promise.all([
+    const [artikel, kundenPreis] = await Promise.all([
       getArtikelByIdClean("68140c25f4a462d4c4c07aec"),
       getKundenPreisByArtikelId("68140c25f4a462d4c4c07aec"),
-      getAllKunden(req.user),
     ]);
     console.log("Dauer:", Date.now() - start, "ms");
-    res.status(200).json({ artikel, kundenPreis, kunden });
+    res.status(200).json({ artikel, kundenPreis });
   }
 );
 

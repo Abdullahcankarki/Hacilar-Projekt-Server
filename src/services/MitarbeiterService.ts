@@ -3,8 +3,60 @@ import { MitarbeiterResource, LoginResource, MitarbeiterRolle } from '../Resourc
 import bcrypt from 'bcryptjs';
 import jwt from "jsonwebtoken"
 
-// JWT-Secret, idealerweise aus der Umgebung
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+// Ersetzt deine aktuelle JWT_SECRET-Deklaration
+const JWT_SECRET: string = (() => {
+  const s = process.env.JWT_SECRET;
+  if (!s) throw new Error("JWT_SECRET environment variable is not set");
+  return s;
+})();
+
+// Allowed Rollen guard (keep in sync with your Resources)
+const ALLOWED_ROLES: MitarbeiterRolle[] = [
+  "admin",
+  "verkauf",
+  "kommissionierung",
+  "kontrolle",
+  "buchhaltung",
+  "wareneingang",
+  "lager",
+  "fahrer",
+  "zerleger",
+  "statistik",
+  "kunde",
+  "support",
+];
+
+const JWT_EXPIRES_SECONDS = Number(process.env.JWT_EXPIRES_SECONDS || 60 * 60 * 10);
+
+function norm(s?: string) {
+  return (s || "").trim();
+}
+function normLower(s?: string) {
+  return (s || "").trim().toLowerCase();
+}
+function sanitizeRollen(rollen?: string[] | MitarbeiterRolle[]): MitarbeiterRolle[] {
+  const list = Array.isArray(rollen) ? rollen : [];
+  const set = new Set(
+    list
+      .map((r) => String(r).trim().toLowerCase())
+      .filter((r) => ALLOWED_ROLES.includes(r as MitarbeiterRolle))
+  );
+  return Array.from(set) as MitarbeiterRolle[];
+}
+
+function mapMitarbeiter(m: any): MitarbeiterResource {
+  return {
+    id: m._id.toString(),
+    name: m.name,
+    rollen: (m.rollen || []) as MitarbeiterRolle[],
+    email: m.email ?? undefined,
+    telefon: m.telefon ?? undefined,
+    abteilung: m.abteilung ?? undefined,
+    aktiv: m.aktiv ?? true,
+    bemerkung: m.bemerkung ?? undefined,
+    eintrittsdatum: m.eintrittsdatum ? new Date(m.eintrittsdatum).toISOString() : undefined,
+  };
+}
 
 /**
  * Erstellt einen neuen Mitarbeiter.
@@ -28,36 +80,38 @@ export async function createMitarbeiter(
     throw new Error("Admin-Zugriff erforderlich");
   }
 
-  const existing = await Mitarbeiter.findOne({ name: data.name });
-  if (existing) {
-    throw new Error("Mitarbeiter existiert bereits");
+  const name = normLower(data.name);
+  if (!name) throw new Error("Name ist erforderlich");
+  if (!data.password) throw new Error("Passwort ist erforderlich");
+
+  // Uniqueness checks (name & optional email)
+  const dupeByName = await Mitarbeiter.findOne({ name });
+  if (dupeByName) throw new Error("Mitarbeiter-Name bereits vergeben");
+
+  const email = data.email ? normLower(data.email) : undefined;
+  if (email) {
+    const dupeByEmail = await Mitarbeiter.findOne({ email });
+    if (dupeByEmail) throw new Error("E-Mail bereits vergeben");
   }
 
   const hashedPassword = await bcrypt.hash(data.password, 10);
+  const rollen = sanitizeRollen(data.rollen);
+  if (rollen.length === 0) rollen.push("lager"); // Default-Rolle, falls nichts gesetzt
+
   const neuerMitarbeiter = new Mitarbeiter({
-    name: data.name.toLowerCase(),
+    name,
     password: hashedPassword,
-    rollen: data.rollen,
-    email: data.email?.toLowerCase(),
-    telefon: data.telefon,
-    abteilung: data.abteilung,
+    rollen,
+    email,
+    telefon: norm(data.telefon),
+    abteilung: norm(data.abteilung),
     aktiv: data.aktiv ?? true,
-    bemerkung: data.bemerkung,
+    bemerkung: norm(data.bemerkung),
     eintrittsdatum: data.eintrittsdatum ? new Date(data.eintrittsdatum) : undefined,
   });
 
   const saved = await neuerMitarbeiter.save();
-  return {
-    id: saved._id.toString(),
-    name: saved.name,
-    rollen: saved.rollen as MitarbeiterRolle[],
-    email: saved.email,
-    telefon: saved.telefon,
-    abteilung: saved.abteilung,
-    aktiv: saved.aktiv,
-    bemerkung: saved.bemerkung,
-    eintrittsdatum: saved.eintrittsdatum?.toISOString(),
-  };
+  return mapMitarbeiter(saved);
 }
 
 /**
@@ -82,7 +136,7 @@ export async function loginMitarbeiter(
   const payload: LoginResource = {
     id: user._id.toString(),
     role: user.rollen as MitarbeiterRolle[],
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 10,
+    exp: Math.floor(Date.now() / 1000) + JWT_EXPIRES_SECONDS,
   };
   const token = jwt.sign(payload, JWT_SECRET);
   return { token, user: payload };
@@ -95,19 +149,8 @@ export async function getAllMitarbeiter(currentUser: LoginResource): Promise<Mit
   if (!currentUser.role.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
-
-  const mitarbeiter = await Mitarbeiter.find();
-  return mitarbeiter.map(m => ({
-    id: m._id.toString(),
-    name: m.name,
-    rollen: m.rollen as MitarbeiterRolle[],
-    email: m.email,
-    telefon: m.telefon,
-    abteilung: m.abteilung,
-    aktiv: m.aktiv,
-    bemerkung: m.bemerkung,
-    eintrittsdatum: m.eintrittsdatum?.toISOString(),
-  }));
+  const mitarbeiter = await Mitarbeiter.find().sort({ name: 1 });
+  return mitarbeiter.map(mapMitarbeiter);
 }
 
 /**
@@ -122,17 +165,7 @@ export async function getMitarbeiterById(id: string, currentUser: LoginResource)
   const m = await Mitarbeiter.findById(id);
   if (!m) throw new Error("Mitarbeiter nicht gefunden");
 
-  return {
-    id: m._id.toString(),
-    name: m.name,
-    rollen: m.rollen as MitarbeiterRolle[],
-    email: m.email,
-    telefon: m.telefon,
-    abteilung: m.abteilung,
-    aktiv: m.aktiv,
-    bemerkung: m.bemerkung,
-    eintrittsdatum: m.eintrittsdatum?.toISOString(),
-  };
+  return mapMitarbeiter(m);
 }
 
 /**
@@ -153,38 +186,52 @@ export async function updateMitarbeiter(
   }>,
   currentUser: LoginResource
 ): Promise<MitarbeiterResource> {
-  if (!currentUser.role.includes("admin") && currentUser.id !== id) {
+  const isAdmin = currentUser.role.includes("admin");
+  if (!isAdmin && currentUser.id !== id) {
     throw new Error("Zugriff verweigert");
   }
 
-  const updateData: any = { ...data };
-  if (data.name) {
-    updateData.name = data.name.toLowerCase()
+  const updateData: any = {};
+
+  if (data.name !== undefined) {
+    const newName = normLower(data.name);
+    if (!newName) throw new Error("Name darf nicht leer sein");
+    const dupe = await Mitarbeiter.findOne({ _id: { $ne: id }, name: newName });
+    if (dupe) throw new Error("Mitarbeiter-Name bereits vergeben");
+    updateData.name = newName;
   }
+
+  if (data.email !== undefined) {
+    const newEmail = normLower(data.email);
+    if (newEmail) {
+      const dupeE = await Mitarbeiter.findOne({ _id: { $ne: id }, email: newEmail });
+      if (dupeE) throw new Error("E-Mail bereits vergeben");
+      updateData.email = newEmail;
+    } else {
+      updateData.email = undefined;
+    }
+  }
+
   if (data.password) {
     updateData.password = await bcrypt.hash(data.password, 10);
   }
-  if (data.eintrittsdatum) {
-    updateData.eintrittsdatum = new Date(data.eintrittsdatum);
+
+  if (isAdmin && data.rollen !== undefined) {
+    updateData.rollen = sanitizeRollen(data.rollen);
   }
-  if (data.email) {
-    updateData.email = data.email?.toLowerCase()
+  if (isAdmin && data.aktiv !== undefined) {
+    updateData.aktiv = !!data.aktiv;
   }
+
+  if (data.telefon !== undefined) updateData.telefon = norm(data.telefon);
+  if (data.abteilung !== undefined) updateData.abteilung = norm(data.abteilung);
+  if (data.bemerkung !== undefined) updateData.bemerkung = norm(data.bemerkung);
+  if (data.eintrittsdatum !== undefined) updateData.eintrittsdatum = data.eintrittsdatum ? new Date(data.eintrittsdatum) : undefined;
 
   const updated = await Mitarbeiter.findByIdAndUpdate(id, updateData, { new: true });
   if (!updated) throw new Error("Mitarbeiter nicht gefunden");
 
-  return {
-    id: updated._id.toString(),
-    name: updated.name.toLowerCase(),
-    rollen: updated.rollen as MitarbeiterRolle[],
-    email: updated.email?.toLowerCase(),
-    telefon: updated.telefon,
-    abteilung: updated.abteilung,
-    aktiv: updated.aktiv,
-    bemerkung: updated.bemerkung,
-    eintrittsdatum: updated.eintrittsdatum?.toISOString(),
-  };
+  return mapMitarbeiter(updated);
 }
 
 /**
@@ -194,7 +241,9 @@ export async function deleteMitarbeiter(id: string, currentUser: LoginResource):
   if (!currentUser.role.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
-
+  if (currentUser.id === id) {
+    throw new Error("Eigenen Account nicht löschen");
+  }
   const deleted = await Mitarbeiter.findByIdAndDelete(id);
   if (!deleted) {
     throw new Error("Mitarbeiter nicht gefunden");

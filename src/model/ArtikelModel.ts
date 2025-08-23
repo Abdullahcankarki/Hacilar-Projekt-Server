@@ -5,9 +5,9 @@ export interface IArtikel extends Document {
   artikelNummer: string
   name: string
   kategorie: string
-  gewichtProStueck: number; // Gewicht pro Stück
-  gewichtProKarton: number;  // Gewicht pro Karton
-  gewichtProKiste: number;   // Gewicht pro Kiste
+  gewichtProStueck?: number; // Gewicht pro Stück
+  gewichtProKarton?: number;  // Gewicht pro Karton
+  gewichtProKiste?: number;   // Gewicht pro Kiste
   bildUrl?: string;
   ausverkauft?: boolean;
   erfassungsModus?: 'GEWICHT' | 'KARTON' | 'STÜCK';

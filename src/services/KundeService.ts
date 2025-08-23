@@ -5,9 +5,37 @@ import { ZerlegeAuftragModel } from "../model/ZerlegeAuftragModel";
 import { KundeResource, LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 // JWT-Secret, idealerweise über Umgebungsvariablen konfiguriert
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
+
+function normalizeEmail(email?: string) {
+  return (email || "").trim().toLowerCase();
+}
+
+function mapKundeToResource(k: any): KundeResource {
+  return {
+    id: k._id.toString(),
+    name: k.name,
+    kundenNummer: k.kundenNummer,
+    email: k.email,
+    adresse: k.adresse,
+    telefon: k.telefon,
+    lieferzeit: k.lieferzeit,
+    ustId: k.ustId,
+    handelsregisterNr: k.handelsregisterNr,
+    ansprechpartner: k.ansprechpartner,
+    website: k.website,
+    branchenInfo: k.branchenInfo,
+    region: k.region,
+    kategorie: k.kategorie,
+    gewerbeDateiUrl: k.gewerbeDateiUrl,
+    zusatzDateiUrl: k.zusatzDateiUrl,
+    isApproved: k.isApproved,
+    updatedAt: k.updatedAt?.toISOString?.() ?? new Date().toISOString(),
+  };
+}
 
 /**
  * Registriert einen neuen Kunden.
@@ -28,52 +56,36 @@ export async function createKunde(data: {
   gewerbeDateiUrl?: string;
   zusatzDateiUrl?: string;
 }): Promise<KundeResource> {
-  // Prüfen, ob bereits ein Kunde mit derselben Email oder KundenNummer existiert
-  const existing = await Kunde.findOne({
-    $or: [{ email: data.email }, { kundenNummer: data.kundenNummer }],
-  });
+  const email = normalizeEmail(data.email);
+  if (!email) throw new Error("E-Mail ist erforderlich");
+
+  // Duplikate prüfen (nur mit definierten Feldern suchen)
+  const or: any[] = [{ email }];
+  if (data.kundenNummer) or.push({ kundenNummer: data.kundenNummer });
+  const existing = await Kunde.findOne({ $or: or });
   if (existing) {
-    throw new Error("Kunde existiert bereits");
+    throw new Error("Kunde mit dieser E-Mail oder Kundennummer existiert bereits");
   }
-  // Passwort hashen
+
   const hashedPassword = await bcrypt.hash(data.password, 10);
   const newKunde = new Kunde({
-    name: data.name,
-    kundenNummer: data.kundenNummer,
+    name: (data.name || "").trim(),
+    kundenNummer: data.kundenNummer?.trim(),
     password: hashedPassword,
-    email: data.email,
-    adresse: data.adresse,
-    telefon: data.telefon,
-    lieferzeit: data.lieferzeit,
-    ustId: data.ustId,
-    ansprechpartner: data.ansprechpartner,
-    region: data.region,
-    kategorie: data.kategorie,
+    email,
+    adresse: (data.adresse || "").trim(),
+    telefon: data.telefon?.trim(),
+    lieferzeit: data.lieferzeit?.trim(),
+    ustId: data.ustId?.trim(),
+    ansprechpartner: data.ansprechpartner?.trim(),
+    region: data.region?.trim(),
+    kategorie: data.kategorie?.trim(),
     isApproved: false,
-    gewerbeDateiUrl: data.gewerbeDateiUrl,
-    zusatzDateiUrl: data.zusatzDateiUrl,
+    gewerbeDateiUrl: data.gewerbeDateiUrl?.trim(),
+    zusatzDateiUrl: data.zusatzDateiUrl?.trim(),
   });
   const saved = await newKunde.save();
-  return {
-    id: saved._id.toString(),
-    name: saved.name,
-    kundenNummer: saved.kundenNummer || "",
-    email: saved.email,
-    adresse: saved.adresse,
-    telefon: saved.telefon,
-    lieferzeit: saved.lieferzeit || "",
-    ustId: saved.ustId,
-    handelsregisterNr: saved.handelsregisterNr,
-    ansprechpartner: saved.ansprechpartner,
-    website: saved.website,
-    branchenInfo: saved.branchenInfo,
-    region: saved.region || "",
-    kategorie: saved.kategorie || "",
-    gewerbeDateiUrl: saved.gewerbeDateiUrl,
-    zusatzDateiUrl: saved.zusatzDateiUrl,
-    isApproved: saved.isApproved,
-    updatedAt: saved.updatedAt.toISOString(),
-  };
+  return mapKundeToResource(saved);
 }
 
 /**
@@ -88,26 +100,7 @@ export async function getUnapprovedKunden(
   }
 
   const kunden = await Kunde.find({ isApproved: false });
-  return kunden.map((k) => ({
-    id: k._id.toString(),
-    name: k.name,
-    kundenNummer: k.kundenNummer,
-    email: k.email,
-    adresse: k.adresse,
-    telefon: k.telefon,
-    lieferzeit: k.lieferzeit,
-    ustId: k.ustId,
-    handelsregisterNr: k.handelsregisterNr,
-    ansprechpartner: k.ansprechpartner,
-    website: k.website,
-    branchenInfo: k.branchenInfo,
-    region: k.region,
-    kategorie: k.kategorie,
-    gewerbeDateiUrl: k.gewerbeDateiUrl,
-    zusatzDateiUrl: k.zusatzDateiUrl,
-    isApproved: k.isApproved,
-    updatedAt: k.updatedAt.toISOString(),
-  }));
+  return kunden.map(mapKundeToResource);
 }
 
 /**
@@ -115,32 +108,61 @@ export async function getUnapprovedKunden(
  * Nur Admins (role === "a") sollten diese Funktion nutzen.
  */
 export async function getAllKunden(
+  params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    region?: string;
+    isApproved?: boolean;
+    sortBy?: string;       // z. B. "name" oder "-createdAt"
+  },
   currentUser: LoginResource
-): Promise<KundeResource[]> {
+): Promise<{ items: KundeResource[]; total: number; page: number; limit: number }> {
   if (!currentUser.role.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
-  const kunden = await Kunde.find();
-  return kunden.map((k) => ({
-    id: k._id.toString(),
-    name: k.name,
-    kundenNummer: k.kundenNummer,
-    email: k.email,
-    adresse: k.adresse,
-    telefon: k.telefon,
-    lieferzeit: k.lieferzeit,
-    ustId: k.ustId,
-    handelsregisterNr: k.handelsregisterNr,
-    ansprechpartner: k.ansprechpartner,
-    website: k.website,
-    branchenInfo: k.branchenInfo,
-    region: k.region,
-    kategorie: k.kategorie,
-    gewerbeDateiUrl: k.gewerbeDateiUrl,
-    zusatzDateiUrl: k.zusatzDateiUrl,
-    isApproved: k.isApproved,
-    updatedAt: k.updatedAt.toISOString(),
-  }));
+
+  const page = params.page ?? 1;
+  const totalDocsAll = await Kunde.estimatedDocumentCount();
+  const limit = params.limit !== undefined ? params.limit : (totalDocsAll || 1);
+
+  const query: any = {};
+  if (params.search) {
+    query.$or = [
+      { name: { $regex: params.search, $options: "i" } },
+      { email: { $regex: params.search, $options: "i" } },
+      { kundenNummer: { $regex: params.search, $options: "i" } },
+    ];
+  }
+  if (params.region) query.region = params.region;
+  if (params.isApproved !== undefined) query.isApproved = params.isApproved;
+
+  const sort: any = {};
+  if (params.sortBy) {
+    // falls "-createdAt" übergeben wird -> absteigend
+    if (params.sortBy.startsWith("-")) {
+      sort[params.sortBy.substring(1)] = -1;
+    } else {
+      sort[params.sortBy] = 1;
+    }
+  } else {
+    sort.createdAt = -1; // Standard: neueste zuerst
+  }
+
+  const [kunden, total] = await Promise.all([
+    Kunde.find(query)
+      .sort(sort)
+      .skip((page - 1) * limit)
+      .limit(limit),
+    Kunde.countDocuments(query),
+  ]);
+
+  return {
+    items: kunden.map(mapKundeToResource),
+    total,
+    page,
+    limit,
+  };
 }
 
 /**
@@ -158,26 +180,7 @@ export async function getKundeById(
   if (!kunde) {
     throw new Error("Kunde nicht gefunden");
   }
-  return {
-    id: kunde._id.toString(),
-    name: kunde.name,
-    kundenNummer: kunde.kundenNummer,
-    email: kunde.email,
-    adresse: kunde.adresse,
-    telefon: kunde.telefon,
-    lieferzeit: kunde.lieferzeit,
-    ustId: kunde.ustId,
-    handelsregisterNr: kunde.handelsregisterNr,
-    ansprechpartner: kunde.ansprechpartner,
-    website: kunde.website,
-    branchenInfo: kunde.branchenInfo,
-    region: kunde.region,
-    kategorie: kunde.kategorie,
-    gewerbeDateiUrl: kunde.gewerbeDateiUrl,
-    zusatzDateiUrl: kunde.zusatzDateiUrl,
-    isApproved: kunde.isApproved,
-    updatedAt: kunde.updatedAt.toISOString(),
-  };
+  return mapKundeToResource(kunde);
 }
 
 /**
@@ -210,52 +213,64 @@ export async function updateKunde(
   if (!currentUser.role.includes("admin") && currentUser.id !== id) {
     throw new Error("Zugriff verweigert");
   }
+
   const updateData: any = {};
-  if (data.name) updateData.name = data.name;
-  if (data.kundenNummer) updateData.kundenNummer = data.kundenNummer;
-  if (data.email) updateData.email = data.email;
-  if (data.adresse) updateData.adresse = data.adresse;
-  if (data.telefon) updateData.telefon = data.telefon;
-  if (data.lieferzeit) updateData.lieferzeit = data.lieferzeit;
-  if (data.ustId) updateData.ustId = data.ustId;
-  if (data.handelsregisterNr)
-    updateData.handelsregisterNr = data.handelsregisterNr;
-  if (data.ansprechpartner) updateData.ansprechpartner = data.ansprechpartner;
-  if (data.website) updateData.website = data.website;
-  if (data.branchenInfo) updateData.branchenInfo = data.branchenInfo;
-  if (data.region) updateData.region = data.region;
-  if (data.kategorie) updateData.kategorie = data.kategorie;
-  if (data.gewerbeDateiUrl) updateData.gewerbeDateiUrl = data.gewerbeDateiUrl;
-  if (data.zusatzDateiUrl) updateData.zusatzDateiUrl = data.zusatzDateiUrl;
-  if (data.isApproved) updateData.isApproved = data.isApproved;
+
+  // E-Mail Update: normalisieren + Duplikate prüfen
+  if (data.email !== undefined) {
+    const email = normalizeEmail(data.email);
+    if (!email) throw new Error("E-Mail darf nicht leer sein");
+    const dupe = await Kunde.findOne({ _id: { $ne: id }, email });
+    if (dupe) throw new Error("Diese E-Mail ist bereits vergeben");
+    updateData.email = email;
+  }
+
+  // Kundennummer Duplikatprüfung
+  if (data.kundenNummer !== undefined) {
+    const num = data.kundenNummer.trim();
+    if (num) {
+      const dupeNum = await Kunde.findOne({ _id: { $ne: id }, kundenNummer: num });
+      if (dupeNum) throw new Error("Diese Kundennummer ist bereits vergeben");
+      updateData.kundenNummer = num;
+    } else {
+      updateData.kundenNummer = undefined;
+    }
+  }
+
+  if (data.name !== undefined) updateData.name = (data.name || "").trim();
+  if (data.adresse !== undefined) updateData.adresse = (data.adresse || "").trim();
+  if (data.telefon !== undefined) updateData.telefon = data.telefon?.trim();
+  if (data.lieferzeit !== undefined) updateData.lieferzeit = data.lieferzeit?.trim();
+  if (data.ustId !== undefined) updateData.ustId = data.ustId?.trim();
+  if (data.handelsregisterNr !== undefined) updateData.handelsregisterNr = data.handelsregisterNr?.trim();
+  if (data.ansprechpartner !== undefined) updateData.ansprechpartner = data.ansprechpartner?.trim();
+  if (data.website !== undefined) updateData.website = data.website?.trim();
+  if (data.branchenInfo !== undefined) updateData.branchenInfo = data.branchenInfo?.trim();
+  if (data.region !== undefined) updateData.region = data.region?.trim();
+  if (data.kategorie !== undefined) updateData.kategorie = data.kategorie?.trim();
+  if (data.gewerbeDateiUrl !== undefined) updateData.gewerbeDateiUrl = data.gewerbeDateiUrl?.trim();
+  if (data.zusatzDateiUrl !== undefined) updateData.zusatzDateiUrl = data.zusatzDateiUrl?.trim();
+
+  // Passwort ändern (optional)
   if (data.password) {
     updateData.password = await bcrypt.hash(data.password, 10);
   }
-  // isApproved darf nicht über updateKunde geändert werden
-  const updated = await Kunde.findByIdAndUpdate(id, updateData, { new: true });
-  if (!updated) {
-    throw new Error("Kunde nicht gefunden");
+
+  // isApproved: NICHT hier änderbar → separate Admin-Funktion nutzen (approveKunde)
+  if (data.isApproved !== undefined) {
+    // Ignorieren, keine Fehlermeldung um Frontend tolerant zu halten
   }
-  return {
-    id: updated._id.toString(),
-    name: updated.name,
-    kundenNummer: updated.kundenNummer,
-    email: updated.email,
-    adresse: updated.adresse,
-    telefon: updated.telefon,
-    lieferzeit: updated.lieferzeit,
-    ustId: updated.ustId,
-    handelsregisterNr: updated.handelsregisterNr,
-    ansprechpartner: updated.ansprechpartner,
-    website: updated.website,
-    branchenInfo: updated.branchenInfo,
-    region: updated.region,
-    kategorie: updated.kategorie,
-    gewerbeDateiUrl: updated.gewerbeDateiUrl,
-    zusatzDateiUrl: updated.zusatzDateiUrl,
-    isApproved: updated.isApproved,
-    updatedAt: updated.updatedAt.toISOString(),
-  };
+
+  const updated = await Kunde.findByIdAndUpdate(id, updateData, { new: true });
+  if (!updated) throw new Error("Kunde nicht gefunden");
+  return mapKundeToResource(updated);
+}
+
+export async function approveKunde(id: string, isApproved: boolean, currentUser: LoginResource): Promise<KundeResource> {
+  if (!currentUser.role.includes("admin")) throw new Error("Admin-Zugriff erforderlich");
+  const updated = await Kunde.findByIdAndUpdate(id, { isApproved }, { new: true });
+  if (!updated) throw new Error("Kunde nicht gefunden");
+  return mapKundeToResource(updated);
 }
 
 /**
@@ -269,29 +284,26 @@ export async function deleteKunde(
   if (!currentUser.role.includes("admin") && currentUser.id !== id) {
     throw new Error("Zugriff verweigert");
   }
-  const deleted = await Kunde.findByIdAndDelete(id);
-  if (!deleted) {
-    throw new Error("Kunde nicht gefunden");
-  }
 
-  // Alle zugehörigen Aufträge des Kunden finden
-  const auftraege = await Auftrag.find({ kunde: id });
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const deleted = await Kunde.findByIdAndDelete(id).session(session);
+      if (!deleted) throw new Error("Kunde nicht gefunden");
 
-  // Alle ArtikelPositionen zu diesen Aufträgen sammeln
-  const artikelPositionIds = auftraege.flatMap((auftrag) => auftrag.artikelPosition);
+      const auftraege = await Auftrag.find({ kunde: id }).session(session);
+      const artikelPositionIds = auftraege.flatMap((auftrag) => auftrag.artikelPosition);
 
-  // ArtikelPositionen löschen
-  if (artikelPositionIds.length > 0) {
-    await ArtikelPosition.deleteMany({ _id: { $in: artikelPositionIds } });
+      if (artikelPositionIds.length > 0) {
+        await ArtikelPosition.deleteMany({ _id: { $in: artikelPositionIds } }).session(session);
+        await ZerlegeAuftragModel.deleteMany({ "artikelPositionen.artikelPositionId": { $in: artikelPositionIds } }).session(session);
+      }
 
-    // Zerlegeaufträge löschen, die diese ArtikelPositionen enthalten
-    await ZerlegeAuftragModel.deleteMany({
-      'artikelPositionen.artikelPositionId': { $in: artikelPositionIds }
+      await Auftrag.deleteMany({ kunde: id }).session(session);
     });
+  } finally {
+    await session.endSession();
   }
-
-  // Aufträge löschen
-  await Auftrag.deleteMany({ kunde: id });
 }
 
 /**
@@ -302,10 +314,11 @@ export async function loginKunde(credentials: {
   email: string;
   password: string;
 }): Promise<{ token: string; user: LoginResource }> {
-  const { email, password } = credentials;
-  if (!email || !password) {
+  const { email: rawEmail, password } = credentials;
+  if (!rawEmail || !password) {
     throw new Error("Email und Passwort sind erforderlich");
   }
+  const email = normalizeEmail(rawEmail);
   const kunde = await Kunde.findOne({ email });
   if (!kunde) {
     throw new Error("Ungültige Anmeldedaten");
@@ -386,4 +399,20 @@ export async function removeKundenFavorit(
     kunde.favoriten = kunde.favoriten.filter((f) => f.toString() !== artikelId);
     await kunde.save();
   }
+}
+
+export async function normalizeKundenEmails(): Promise<number> {
+  const kunden = await Kunde.find({ email: { $exists: true, $ne: null } });
+
+  let count = 0;
+  for (const k of kunden) {
+    const normalized = k.email.trim().toLowerCase();
+    if (k.email !== normalized) {
+      k.email = normalized;
+      await k.save();
+      count++;
+    }
+  }
+
+  return count;
 }

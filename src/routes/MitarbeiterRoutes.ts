@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import { LoginResource } from "../Resources"; // Passe den Pfad ggf. an
 import { createMitarbeiter, deleteMitarbeiter, getAllMitarbeiter, getMitarbeiterById, loginMitarbeiter, updateMitarbeiter } from "../services/MitarbeiterService";
 
-const verkaeuferRouter = express.Router();
+const mitarbeiterRouter = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
 // Typdefinition für authentifizierte Requests
@@ -39,12 +39,12 @@ const validate = (req: Request, res: Response, next: NextFunction) => {
 };
 
 /* ---------------------------
-   Routen für Verkaeufer
+   Routen für Mitarbeiter
 -----------------------------*/
 
-// POST /verkaeufer
-// Erstellt einen neuen Verkäufer (nur Admins)
-verkaeuferRouter.post(
+// POST /mitarbeiter
+// Erstellt einen neuen Mitarbeiter (nur Admins)
+mitarbeiterRouter.post(
   "/",
   authenticate,
   [
@@ -58,6 +58,30 @@ verkaeuferRouter.post(
       .trim()
       .notEmpty()
       .withMessage("Passwort ist erforderlich"),
+    body("email").optional().isEmail().normalizeEmail(),
+    body("rollen").optional().isArray(),
+    body("rollen.*")
+      .optional()
+      .isString()
+      .isIn([
+        "admin",
+        "verkauf",
+        "kommissionierung",
+        "kontrolle",
+        "buchhaltung",
+        "wareneingang",
+        "lager",
+        "fahrer",
+        "zerleger",
+        "statistik",
+        "kunde",
+        "support",
+      ]),
+    body("aktiv").optional().isBoolean().toBoolean(),
+    body("telefon").optional().isString().trim(),
+    body("abteilung").optional().isString().trim(),
+    body("bemerkung").optional().isString().trim(),
+    body("eintrittsdatum").optional().isISO8601().toDate(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
@@ -71,9 +95,9 @@ verkaeuferRouter.post(
   }
 );
 
-// GET /verkaeufer
-// Ruft alle Verkäufer ab (nur Admins)
-verkaeuferRouter.get(
+// GET /mitarbeiter
+// Ruft alle Mitarbeiter ab (nur Admins)
+mitarbeiterRouter.get(
   "/",
   authenticate,
   async (req: AuthRequest, res: Response) => {
@@ -87,9 +111,9 @@ verkaeuferRouter.get(
   }
 );
 
-// GET /verkaeufer/:id
-// Ruft einen Verkäufer anhand der ID ab
-verkaeuferRouter.get(
+// GET /mitarbeiter/:id
+// Ruft einen Mitarbeiter anhand der ID ab
+mitarbeiterRouter.get(
   "/:id",
   authenticate,
   [param("id").isMongoId().withMessage("Ungültige ID")],
@@ -105,17 +129,39 @@ verkaeuferRouter.get(
   }
 );
 
-// PUT /verkaeufer/:id
-// Aktualisiert einen Verkäufer (nur Admins oder der eigene Account)
-verkaeuferRouter.put(
+// PUT /mitarbeiter/:id
+// Aktualisiert einen Mitarbeiter (nur Admins oder der eigene Account)
+mitarbeiterRouter.put(
   "/:id",
   authenticate,
   [
     param("id").isMongoId().withMessage("Ungültige ID"),
     body("name").optional().isString().trim().notEmpty(),
     body("password").optional().isString().trim().notEmpty(),
-    body("admin").optional().isBoolean(),
-    body("kom").optional().isBoolean(),
+    body("email").optional().isEmail().normalizeEmail(),
+    body("rollen").optional().isArray(),
+    body("rollen.*")
+      .optional()
+      .isString()
+      .isIn([
+        "admin",
+        "verkauf",
+        "kommissionierung",
+        "kontrolle",
+        "buchhaltung",
+        "wareneingang",
+        "lager",
+        "fahrer",
+        "zerleger",
+        "statistik",
+        "kunde",
+        "support",
+      ]),
+    body("aktiv").optional().isBoolean().toBoolean(),
+    body("telefon").optional().isString().trim(),
+    body("abteilung").optional().isString().trim(),
+    body("bemerkung").optional().isString().trim(),
+    body("eintrittsdatum").optional().isISO8601().toDate(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
@@ -133,9 +179,9 @@ verkaeuferRouter.put(
   }
 );
 
-// DELETE /verkaeufer/:id
-// Löscht einen Verkäufer (nur Admins)
-verkaeuferRouter.delete(
+// DELETE /mitarbeiter/:id
+// Löscht einen Mitarbeiter (nur Admins)
+mitarbeiterRouter.delete(
   "/:id",
   authenticate,
   [param("id").isMongoId().withMessage("Ungültige ID")],
@@ -144,16 +190,16 @@ verkaeuferRouter.delete(
     try {
       const currentUser = req.user as LoginResource;
       await deleteMitarbeiter(req.params.id, currentUser);
-      res.json({ message: "Verkäufer gelöscht" });
+      res.json({ message: "Mitarbeiter gelöscht" });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   }
 );
 
-// POST /verkaeufer/login
-// Authentifiziert einen Verkäufer und gibt ein JWT zurück
-verkaeuferRouter.post(
+// POST /mitarbeiter/login
+// Authentifiziert einen Mitarbeiter und gibt ein JWT zurück
+mitarbeiterRouter.post(
   "/login",
   [
     body("name")
@@ -178,4 +224,4 @@ verkaeuferRouter.post(
   }
 );
 
-export default verkaeuferRouter;
+export default mitarbeiterRouter;
