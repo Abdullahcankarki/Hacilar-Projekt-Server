@@ -49,7 +49,7 @@ app.use("/api/fahrzeug", fahrzeugRouter);
 app.use("/api/region-rule", regionRuleRouter);
 app.use("/api/reihenfolge-vorlage", reihenfolgeVorlageRouter);
 app.use("/api/tour", tourRouter)
-app.use("/api/tourstop", tourStopRouter)
+app.use("/api/tour-stop", tourStopRouter)
 
 
 export default app;

@@ -4,7 +4,7 @@ export type TourStatus = "geplant" | "laufend" | "abgeschlossen" | "archiviert";
 
 export interface TourDoc extends Document {
   _id: Types.ObjectId;
-  datum: Date;
+  datum: string;
   region: string;
   name?: string;
   fahrzeugId?: Types.ObjectId | null;
@@ -24,7 +24,7 @@ export interface TourDoc extends Document {
 
 const TourSchema = new Schema<TourDoc, TourModel>(
   {
-    datum: { type: Date, required: true, index: true },
+    datum: { type: String, required: true, index: true },
     region: { type: String, required: true, index: true },
     name: { type: String },
     fahrzeugId: { type: Schema.Types.ObjectId, ref: "Fahrzeug", default: null, index: true },

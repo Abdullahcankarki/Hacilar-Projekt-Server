@@ -10,8 +10,9 @@ export async function createReihenfolgeVorlage(
   const newDoc = new ReihenfolgeVorlage({
     region: data.region.trim(),
     name: data.name.trim(),
-    kundenReihenfolge: data.kundenIdsInReihenfolge.map((id) => ({
+    kundenReihenfolge: data.kundenIdsInReihenfolge.map((id, idx) => ({
       kundeId: new Types.ObjectId(id),
+      position: idx + 1,
     })),
   });
 
@@ -96,8 +97,9 @@ export async function updateReihenfolgeVorlage(
   if (data.region !== undefined) updateData.region = data.region.trim();
   if (data.name !== undefined) updateData.name = data.name.trim();
   if (data.kundenIdsInReihenfolge !== undefined) {
-    updateData.kundenReihenfolge = data.kundenIdsInReihenfolge.map((cid) => ({
+    updateData.kundenReihenfolge = data.kundenIdsInReihenfolge.map((cid, idx) => ({
       kundeId: new Types.ObjectId(cid),
+      position: idx + 1,
     }));
   }
 

@@ -10,6 +10,7 @@ import {
   updateTourStop,
   deleteTourStop,
   deleteAllTourStops,
+  moveTourStopAcrossTours,
 } from "../services/TourStopService";
 import { authenticate, AuthRequest, isAdmin, validate } from "./helper-hooks";
 
@@ -140,6 +141,34 @@ tourStopRouter.patch(
   async (req: AuthRequest, res: Response) => {
     try {
       const result = await updateTourStop(req.params.id, req.body);
+      res.json(result);
+    } catch (error: any) {
+      if (String(error.message || "").includes("TourStop nicht gefunden")) {
+        return res.status(404).json({ error: "TourStop nicht gefunden" });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/* ------------------------------ MOVE (X-Tour) ----------------------------- */
+tourStopRouter.post(
+  "/:id/move",
+  authenticate,
+  isAdmin,
+  [
+    param("id").isString().trim().notEmpty(),
+    body("toTourId").isString().trim().notEmpty().withMessage("toTourId ist erforderlich"),
+    body("targetIndex").optional().isInt({ min: 0 }).toInt(), // 0-basiert aus dem Frontend
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await moveTourStopAcrossTours({
+        stopId: req.params.id,
+        toTourId: req.body.toTourId,
+        targetIndex: req.body.targetIndex,
+      });
       res.json(result);
     } catch (error: any) {
       if (String(error.message || "").includes("TourStop nicht gefunden")) {

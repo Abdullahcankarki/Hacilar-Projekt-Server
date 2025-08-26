@@ -44,6 +44,29 @@ reihenfolgeVorlageRouter.post(
   }
 );
 
+
+/* ------------------------------ LIST/QUERY ---------------------------- */
+reihenfolgeVorlageRouter.get(
+  "/",
+  authenticate,
+  [
+    query("region").optional().isString().trim(),
+    query("q").optional().isString().trim(),
+    query("page").optional().isInt({ min: 1 }).toInt(),
+    query("limit").optional().isInt({ min: 1, max: 1000 }).toInt(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { region, q, page, limit } = req.query as any;
+      const result = await listReihenfolgeVorlagen({ region, q, page, limit });
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 /* -------------------------------- READ -------------------------------- */
 reihenfolgeVorlageRouter.get(
   "/:id",
@@ -61,27 +84,6 @@ reihenfolgeVorlageRouter.get(
   }
 );
 
-/* ------------------------------ LIST/QUERY ---------------------------- */
-reihenfolgeVorlageRouter.get(
-  "/",
-  authenticate,
-  [
-    query("region").optional().isString().trim(),
-    query("q").optional().isString().trim(),
-    query("page").optional().isInt({ min: 1 }).toInt(),
-    query("limit").optional().isInt({ min: 1, max: 200 }).toInt(),
-  ],
-  validate,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const { region, q, page, limit } = req.query as any;
-      const result = await listReihenfolgeVorlagen({ region, q, page, limit });
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  }
-);
 
 /* ------------------------------- UPDATE ------------------------------- */
 reihenfolgeVorlageRouter.patch(

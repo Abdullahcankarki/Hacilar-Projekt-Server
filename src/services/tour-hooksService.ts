@@ -392,12 +392,28 @@ export async function moveStopBetweenTours(params: {
 // ---------------------- Helfer/Util ----------------------
 
 export async function recomputeTourWeight(tourId: string, session?: mongoose.ClientSession) {
+  // Summiert robust: konvertiert Strings -> double; onError/onNull => 0
   const agg = await TourStop.aggregate([
     { $match: { tourId: new mongoose.Types.ObjectId(tourId) } },
-    { $group: { _id: null, sum: { $sum: { $ifNull: ["$gewichtKg", 0] } } } },
+    {
+      $group: {
+        _id: null,
+        sum: {
+          $sum: {
+            $convert: { input: "$gewichtKg", to: "double", onError: 0, onNull: 0 }
+          }
+        }
+      }
+    }
   ]).session(session || null);
-  const sum = agg[0]?.sum ?? 0;
-  await Tour.updateOne({ _id: tourId }, { $set: { belegtesGewichtKg: sum } }, { session });
+
+  const sum = typeof agg?.[0]?.sum === "number" ? agg[0].sum : 0;
+
+  await Tour.updateOne(
+    { _id: new mongoose.Types.ObjectId(tourId) },
+    { $set: { belegtesGewichtKg: sum } },
+    { session }
+  );
 }
 
 export async function updateOverCapacityFlag(tourId: string, session?: mongoose.ClientSession) {

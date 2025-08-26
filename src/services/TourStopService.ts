@@ -1,10 +1,24 @@
 // backend/src/services/TourStopService.ts
 import mongoose, { ClientSession, Types } from "mongoose";
 import { TourStop } from "../model/TourStopModel"; // dein Mongoose Model
-import { Tour } from "../model/TourModel";         // für Gewicht-Neuberechnung
-import { Auftrag } from "../model/AuftragModel";   // optional für GewichtSumme
+import { Tour } from "../model/TourModel"; // für Gewicht-Neuberechnung
+import { Auftrag } from "../model/AuftragModel"; // optional für GewichtSumme
 import { TourStopResource } from "src/Resources";
-import { recomputeTourWeight, updateOverCapacityFlag } from "./tour-hooksService";
+
+import {
+  recomputeTourWeight,
+  updateOverCapacityFlag,
+} from "./tour-hooksService";
+
+// Gewicht 1:1 aus Auftrag übernehmen
+async function deriveGewichtFromAuftrag(auftragId: string, session?: mongoose.ClientSession): Promise<number | null> {
+  const a: any = await Auftrag.findById(auftragId).session(session || (null as any)).lean();
+  if (!a) return null;
+  const raw = (a as any).gewicht;
+  if (typeof raw === 'number' && !Number.isNaN(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '' && !Number.isNaN(Number(raw))) return Number(raw);
+  return null;
+}
 
 export async function createTourStop(data: {
   tourId: string;
@@ -19,9 +33,14 @@ export async function createTourStop(data: {
   signedByName?: string;
   leergutMitnahme?: { art: string; anzahl: number; gewichtKg?: number }[];
 }): Promise<TourStopResource> {
-  // letzte Position berechnen
-  const count = await TourStop.countDocuments({ tourId: data.tourId });
-  const position = count + 1;
+  // letzte Position robust ermitteln (MAX(position) + 1), funktioniert auch bei Lücken
+  const last = await TourStop.find({ tourId: data.tourId })
+    .sort({ position: -1 })
+    .limit(1);
+  const position = ((last[0]?.position as number | undefined) ?? 0) + 1;
+
+  // Gewicht primär aus Auftrag ableiten; falls nicht ermittelbar, optional übergebenen Wert verwenden
+  const derivedGewicht = await deriveGewichtFromAuftrag(data.auftragId);
 
   const newStop = new TourStop({
     tourId: new Types.ObjectId(data.tourId),
@@ -29,7 +48,7 @@ export async function createTourStop(data: {
     kundeId: new Types.ObjectId(data.kundeId),
     kundeName: data.kundeName,
     position,
-    gewichtKg: data.gewichtKg ?? null,
+    gewichtKg: derivedGewicht !== null ? derivedGewicht : (data.gewichtKg !== undefined && data.gewichtKg !== null ? Number(data.gewichtKg) : null),
     status: data.status,
     fehlgrund: data.fehlgrund,
     signaturPngBase64: data.signaturPngBase64,
@@ -39,12 +58,19 @@ export async function createTourStop(data: {
   });
 
   const saved = await newStop.save();
+  // Auftrag mit neuem Stop verknüpfen
+  await Auftrag.updateOne(
+    { _id: data.auftragId },
+    { $set: { tourId: new Types.ObjectId(data.tourId), tourStopId: saved._id } }
+  );
   await recomputeTourWeight(saved.tourId.toString());
 
   return toResource(saved);
 }
 
-export async function getTourStopById(id: string): Promise<TourStopResource | null> {
+export async function getTourStopById(
+  id: string
+): Promise<TourStopResource | null> {
   const doc = await TourStop.findById(id);
   return doc ? toResource(doc) : null;
 }
@@ -63,22 +89,38 @@ export async function listTourStops(filter: {
   return docs.map(toResource);
 }
 
-export async function updateTourStop(id: string, data: Partial<TourStopResource>): Promise<TourStopResource> {
+export async function updateTourStop(
+  id: string,
+  data: Partial<TourStopResource>
+): Promise<TourStopResource> {
   const doc = await TourStop.findById(id);
   if (!doc) throw new Error("TourStop nicht gefunden");
 
   if (data.position && data.position !== doc.position) {
-    // Position neu sortieren
-    await resequenceStops(doc.tourId.toString(), doc._id.toString(), data.position);
+    // Position neu sortieren (kollisionssicher)
+    await resequenceStopsSafe(
+      doc.tourId.toString(),
+      doc._id.toString(),
+      data.position
+    );
   }
 
-  if (data.gewichtKg !== undefined) doc.gewichtKg = data.gewichtKg;
+  if (data.gewichtKg !== undefined) {
+    const num = data.gewichtKg as any;
+    doc.gewichtKg =
+      num === null || num === "" || Number.isNaN(Number(num))
+        ? null
+        : Number(num);
+  }
   if (data.status !== undefined) doc.status = data.status;
   if (data.fehlgrund !== undefined) doc.fehlgrund = data.fehlgrund;
-  if (data.signaturPngBase64 !== undefined) doc.signaturPngBase64 = data.signaturPngBase64;
-  if (data.signTimestampUtc !== undefined) doc.signTimestampUtc = data.signTimestampUtc;
+  if (data.signaturPngBase64 !== undefined)
+    doc.signaturPngBase64 = data.signaturPngBase64;
+  if (data.signTimestampUtc !== undefined)
+    doc.signTimestampUtc = data.signTimestampUtc;
   if (data.signedByName !== undefined) doc.signedByName = data.signedByName;
-  if (data.leergutMitnahme !== undefined) doc.leergutMitnahme = data.leergutMitnahme;
+  if (data.leergutMitnahme !== undefined)
+    doc.leergutMitnahme = data.leergutMitnahme;
 
   await doc.save();
   await recomputeTourWeight(doc.tourId.toString());
@@ -88,20 +130,99 @@ export async function updateTourStop(id: string, data: Partial<TourStopResource>
 
 /* --------------------------- Hilfsfunktionen --------------------------- */
 
-
+// ersetzt die bisherige Funktion 1:1
 async function resequenceStops(tourId: string, stopId: string, newPos: number) {
-  const stops = await TourStop.find({ tourId }).sort({ position: 1 });
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // 1) Aktuelle Reihenfolge stabil (in der Session) lesen
+      const stops = await TourStop.find({ tourId })
+        .sort({ position: 1 })
+        .session(session);
+      const maxPos = stops.length;
+      const bounded = Math.max(1, Math.min(newPos, maxPos));
+
+      // Ziel-IDs berechnen (stopId an gewünschte Stelle einsetzen)
+      const reordered = stops
+        .filter((s) => s._id.toString() !== stopId)
+        .map((s) => s._id.toString());
+      reordered.splice(bounded - 1, 0, stopId);
+
+      // 2) PHASE A: Alle Stops temporär in hohen Bereich verschieben (verhindert (tourId, position) Kollisionen)
+      const TEMP_OFFSET = 1000;
+      if (stops.length) {
+        await TourStop.bulkWrite(
+          stops.map((s, idx) => ({
+            updateOne: {
+              filter: { _id: s._id },
+              update: { $set: { position: TEMP_OFFSET + (idx + 1) } },
+            },
+          })),
+          { session }
+        );
+      }
+
+      // 3) PHASE B: Finale Positionen 1..N gemäß 'reordered' setzen
+      if (reordered.length) {
+        await TourStop.bulkWrite(
+          reordered.map((id, idx) => ({
+            updateOne: {
+              filter: { _id: id },
+              update: { $set: { position: idx + 1 } },
+            },
+          })),
+          { session }
+        );
+      }
+    });
+  } finally {
+    await session.endSession();
+  }
+}
+
+// Verhindert (tourId, position)-Kollisionen durch Zweiphasen-Update und erlaubt Nutzung in bestehender Session
+async function resequenceStopsSafe(
+  tourId: string,
+  stopId: string,
+  newPos: number,
+  session?: mongoose.ClientSession
+) {
+  const stops = await TourStop.find({ tourId })
+    .session(session || (null as any))
+    .sort({ position: 1 });
+  if (!stops.length) return;
+
   const maxPos = stops.length;
   const bounded = Math.max(1, Math.min(newPos, maxPos));
 
+  // neue Reihenfolge mit stopId an gewünschter Position
   const reordered = stops
     .filter((s) => s._id.toString() !== stopId)
     .map((s) => s._id.toString());
-
   reordered.splice(bounded - 1, 0, stopId);
 
-  for (let i = 0; i < reordered.length; i++) {
-    await TourStop.updateOne({ _id: reordered[i] }, { $set: { position: i + 1 } });
+  const BULK_OFFSET = 10000;
+
+  // Phase A: temporär in hohen Bereich
+  const bulkA = reordered.map((id, i) => ({
+    updateOne: {
+      filter: { _id: new Types.ObjectId(id) },
+      update: { $set: { position: i + 1 + BULK_OFFSET } },
+    },
+  }));
+  if (bulkA.length) {
+    await TourStop.bulkWrite(bulkA, { session });
+  }
+
+  // Phase B: final 1..N
+  const bulkB = reordered.map((id, i) => ({
+    updateOne: {
+      filter: { _id: new Types.ObjectId(id) },
+      update: { $set: { position: i + 1 } },
+    },
+  }));
+  if (bulkB.length) {
+    await TourStop.bulkWrite(bulkB, { session });
   }
 }
 
@@ -125,7 +246,11 @@ function toResource(doc: any): TourStopResource {
   };
 }
 // Lücke schließen: alle Positionen > oldPos -1
-async function closeGapsAfterRemoval(tourId: string, oldPos: number, session: ClientSession) {
+async function closeGapsAfterRemoval(
+  tourId: string,
+  oldPos: number,
+  session: ClientSession
+) {
   await TourStop.updateMany(
     { tourId, position: { $gt: oldPos } },
     { $inc: { position: -1 } },
@@ -134,7 +259,11 @@ async function closeGapsAfterRemoval(tourId: string, oldPos: number, session: Cl
 }
 
 // Leere Tour löschen (standardmäßig nur, wenn isStandard=true)
-async function deleteTourIfEmpty(tourId: string, session: ClientSession, onlyIfStandard = true) {
+async function deleteTourIfEmpty(
+  tourId: string,
+  session: ClientSession,
+  onlyIfStandard = true
+) {
   const remaining = await TourStop.countDocuments({ tourId }).session(session);
   if (remaining > 0) return;
 
@@ -201,7 +330,10 @@ export async function deleteAllTourStops(): Promise<void> {
   try {
     await session.withTransaction(async () => {
       // betroffene Stops/Touren/ Aufträge erfassen
-      const stops = await TourStop.find({}, { _id: 1, tourId: 1, position: 1, auftragId: 1 }).session(session);
+      const stops = await TourStop.find(
+        {},
+        { _id: 1, tourId: 1, position: 1, auftragId: 1 }
+      ).session(session);
       if (!stops.length) {
         await TourStop.deleteMany({}).session(session);
         return;
@@ -245,6 +377,132 @@ export async function deleteAllTourStops(): Promise<void> {
         await deleteTourIfEmpty(tourId, session, true);
       }
     });
+  } finally {
+    await session.endSession();
+  }
+}
+
+/**
+ * Stop zwischen Touren verschieben (atomar):
+ * - Quelle: Stop lesen, Daten puffern, löschen, Lücke schließen
+ * - Ziel: Stop am Ende anlegen, optional an Zielposition verschieben
+ * - Aufträge verknüpfen, Gewichte & OverCapacity für beide Touren neu berechnen
+ */
+export async function moveTourStopAcrossTours(params: {
+  stopId: string;
+  toTourId: string;
+  targetIndex?: number; // 0-basiert, optional
+}): Promise<TourStopResource> {
+  const session = await mongoose.startSession();
+  try {
+    let createdDoc: any;
+    await session.withTransaction(async () => {
+      const stop = await TourStop.findById(params.stopId).session(session);
+      if (!stop) throw new Error("TourStop nicht gefunden");
+
+      const fromTourId = String(stop.tourId);
+      const toTourId = String(params.toTourId);
+
+      // Falls gleiche Tour → nur resequence
+      if (fromTourId === toTourId) {
+        const newPos =
+          typeof params.targetIndex === "number"
+            ? params.targetIndex + 1
+            : stop.position;
+        if (newPos && newPos !== stop.position) {
+          await resequenceStopsSafe(
+            fromTourId,
+            stop._id.toString(),
+            newPos,
+            session
+          );
+        }
+        const fresh = await TourStop.findById(stop._id).session(session);
+        return toResource(fresh);
+      }
+
+      // Daten puffern, bevor wir löschen
+      const payload = {
+        auftragId: String(stop.auftragId),
+        kundeId: String(stop.kundeId),
+        kundeName: stop.kundeName as string | undefined,
+        gewichtKg: (stop.gewichtKg ?? undefined) as number | undefined,
+        status: String(stop.status),
+        fehlgrund: stop.fehlgrund as any,
+        signaturPngBase64: stop.signaturPngBase64 as string | undefined,
+        signTimestampUtc: stop.signTimestampUtc as string | undefined,
+        signedByName: stop.signedByName as string | undefined,
+        leergutMitnahme: Array.isArray(stop.leergutMitnahme)
+          ? stop.leergutMitnahme
+          : [],
+      };
+
+      const oldPos = typeof stop.position === "number" ? stop.position : 0;
+
+      // 1) Quelle: Stop löschen
+      await TourStop.deleteOne({ _id: stop._id }).session(session);
+      //    Quelle: Reihenfolge schließen
+      if (oldPos > 0) {
+        await closeGapsAfterRemoval(fromTourId, oldPos, session);
+      }
+
+      // 2) Ziel: nächste freie Position via MAX(position)+1 bestimmen (robust gegen Lücken) und Stop anlegen
+      const lastInTarget = await TourStop.find({ tourId: toTourId })
+        .session(session)
+        .sort({ position: -1 })
+        .limit(1);
+      const nextPos =
+        ((lastInTarget[0]?.position as number | undefined) ?? 0) + 1;
+
+      const newStop = new TourStop({
+        tourId: new Types.ObjectId(toTourId),
+        auftragId: new Types.ObjectId(payload.auftragId),
+        kundeId: new Types.ObjectId(payload.kundeId),
+        kundeName: payload.kundeName,
+        position: nextPos,
+        gewichtKg: payload.gewichtKg ?? null,
+        status: payload.status,
+        fehlgrund: payload.fehlgrund,
+        signaturPngBase64: payload.signaturPngBase64,
+        signTimestampUtc: payload.signTimestampUtc,
+        signedByName: payload.signedByName,
+        leergutMitnahme: payload.leergutMitnahme ?? [],
+      });
+      const saved = await newStop.save({ session });
+      createdDoc = saved;
+
+      // 3) Optional: an Zielposition verschieben (Server-seitiges, kollisionssicheres Resequencing)
+      if (typeof params.targetIndex === "number" && params.targetIndex >= 0) {
+        const desiredPos = Math.min(params.targetIndex + 1, nextPos);
+        if (desiredPos !== (saved.position as number)) {
+          await resequenceStopsSafe(
+            toTourId,
+            saved._id.toString(),
+            desiredPos,
+            session
+          );
+        }
+      }
+
+      // 4) Auftrag-Verknüpfung aktualisieren
+      await Auftrag.updateOne(
+        { _id: payload.auftragId },
+        {
+          $set: { tourId: new Types.ObjectId(toTourId), tourStopId: saved._id },
+        },
+        { session }
+      );
+
+      // 5) Recompute & Flags für beide Touren
+      await recomputeTourWeight(fromTourId, session);
+      await updateOverCapacityFlag(fromTourId, session);
+      await deleteTourIfEmpty(fromTourId, session, /* onlyIfStandard */ true);
+
+      await recomputeTourWeight(toTourId, session);
+      await updateOverCapacityFlag(toTourId, session);
+    });
+
+    return toResource(createdDoc);
   } finally {
     await session.endSession();
   }
