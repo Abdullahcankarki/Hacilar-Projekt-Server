@@ -2,13 +2,13 @@
   "name": "Hacilar-App-Server",
   "version": "0.0.1",
   "description": "Server for the Hacilar-Web-Applikation",
-"scripts": {
-  "test": "jest --runInBand",
-  "clean": "rimraf dist coverage junit.xml abgabe*.zip all.log",
-  "build": "tsc -p tsconfig.json",
-  "start": "node dist/index.js",
-  "start:dev": "nodemon -e ts,js --exec \"ts-node src/index.ts\""
-},
+  "scripts": {
+    "test": "jest --runInBand",
+    "clean": "rimraf dist coverage junit.xml abgabe*.zip all.log",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:dev": "nodemon -e ts,js --exec \"ts-node src/index.ts\""
+  },
   "author": "",
   "devDependencies": {
     "@types/bcryptjs": "^2.4.3",
@@ -16,6 +16,7 @@
     "@types/express": "^4.17.17",
     "@types/jest": "^29.5.4",
     "@types/jsonwebtoken": "^9.0.9",
+    "@types/luxon": "^3.7.1",
     "@types/node": "^20.5.9",
     "@types/supertest": "^2.0.12",
     "bestzip": "^2.2.1",
@@ -61,5 +62,7 @@
     "skipLibCheck": true,
     "sourceMap": false
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

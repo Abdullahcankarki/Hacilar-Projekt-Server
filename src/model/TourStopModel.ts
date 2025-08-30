@@ -1,7 +1,12 @@
 // backend/src/model/TourStopModel.ts
 import { Schema, model, Types, Document } from "mongoose";
 
-export type StopStatus = "offen" | "unterwegs" | "zugestellt" | "teilweise" | "fehlgeschlagen";
+export type StopStatus =
+  | "offen"
+  | "unterwegs"
+  | "zugestellt"
+  | "teilweise"
+  | "fehlgeschlagen";
 export type FehlgrundEnum =
   | "KUNDE_NICHT_ERREICHBAR"
   | "ANNAHME_VERWEIGERT"
@@ -12,12 +17,13 @@ export type FehlgrundEnum =
 
 export interface TourStopDoc extends Document {
   _id: Types.ObjectId;
-  tourId: Types.ObjectId;          // ref: Tour
-  auftragId: Types.ObjectId;       // ref: Auftrag (1 Auftrag = 1 Stop)
-  kundeId: Types.ObjectId;         // ref: Kunde (denormalisiert)
+  tourId: Types.ObjectId; // ref: Tour
+  auftragId: Types.ObjectId; // ref: Auftrag (1 Auftrag = 1 Stop)
+  kundeId: Types.ObjectId; // ref: Kunde (denormalisiert)
   kundeName?: string;
-  position: number;                // 1..n
-  gewichtKg?: number | null;       // optional, Fallback aus Auftrag
+  kundeAdress?: string;
+  position: number; // 1..n
+  gewichtKg?: number | null; // optional, Fallback aus Auftrag
   status: StopStatus;
   fehlgrund?: { code?: FehlgrundEnum; text?: string };
   // Proof (ohne Fotos):
@@ -33,10 +39,26 @@ export interface TourStopDoc extends Document {
 
 const TourStopSchema = new Schema<TourStopDoc>(
   {
-    tourId: { type: Schema.Types.ObjectId, ref: "Tour", required: true, index: true },
-    auftragId: { type: Schema.Types.ObjectId, ref: "Auftrag", required: true, unique: true },
-    kundeId: { type: Schema.Types.ObjectId, ref: "Kunde", required: true, index: true },
+    tourId: {
+      type: Schema.Types.ObjectId,
+      ref: "Tour",
+      required: true,
+      index: true,
+    },
+    auftragId: {
+      type: Schema.Types.ObjectId,
+      ref: "Auftrag",
+      required: true,
+      unique: true,
+    },
+    kundeId: {
+      type: Schema.Types.ObjectId,
+      ref: "Kunde",
+      required: true,
+      index: true,
+    },
     kundeName: { type: String },
+    kundeAdress: { type: String },
     position: { type: Number, required: true }, // Unique zusammen mit tourId, s.u.
     gewichtKg: { type: Number, default: null },
     status: {
@@ -48,12 +70,19 @@ const TourStopSchema = new Schema<TourStopDoc>(
     fehlgrund: {
       code: {
         type: String,
-        enum: ["KUNDE_NICHT_ERREICHBAR", "ANNAHME_VERWEIGERT", "FALSCH_ADRESSE", "NICHT_RECHTZEITIG", "WARE_BESCHAEDIGT", "SONSTIGES"],
+        enum: [
+          "KUNDE_NICHT_ERREICHBAR",
+          "ANNAHME_VERWEIGERT",
+          "FALSCH_ADRESSE",
+          "NICHT_RECHTZEITIG",
+          "WARE_BESCHAEDIGT",
+          "SONSTIGES",
+        ],
         required: false,
       },
       text: { type: String },
     },
-    signaturPngBase64: { type: String, default: null },
+    signaturPngBase64: { type: String },
     signTimestampUtc: { type: String, default: null },
     signedByName: { type: String, default: null },
     leergutMitnahme: [{ art: String, anzahl: Number, gewichtKg: Number }],

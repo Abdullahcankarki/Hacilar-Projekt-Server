@@ -3,6 +3,7 @@ import mongoose, { ClientSession, Types } from "mongoose";
 import { TourStop } from "../model/TourStopModel"; // dein Mongoose Model
 import { Tour } from "../model/TourModel"; // für Gewicht-Neuberechnung
 import { Auftrag } from "../model/AuftragModel"; // optional für GewichtSumme
+import { Kunde } from "../model/KundeModel"; // Kunde lesen für Name/Adresse
 import { TourStopResource } from "src/Resources";
 
 import {
@@ -11,13 +12,31 @@ import {
 } from "./tour-hooksService";
 
 // Gewicht 1:1 aus Auftrag übernehmen
-async function deriveGewichtFromAuftrag(auftragId: string, session?: mongoose.ClientSession): Promise<number | null> {
-  const a: any = await Auftrag.findById(auftragId).session(session || (null as any)).lean();
+async function deriveGewichtFromAuftrag(
+  auftragId: string,
+  session?: mongoose.ClientSession
+): Promise<number | null> {
+  const a: any = await Auftrag.findById(auftragId)
+    .session(session || (null as any))
+    .lean();
   if (!a) return null;
   const raw = (a as any).gewicht;
-  if (typeof raw === 'number' && !Number.isNaN(raw)) return raw;
-  if (typeof raw === 'string' && raw.trim() !== '' && !Number.isNaN(Number(raw))) return Number(raw);
+  if (typeof raw === "number" && !Number.isNaN(raw)) return raw;
+  if (
+    typeof raw === "string" &&
+    raw.trim() !== "" &&
+    !Number.isNaN(Number(raw))
+  )
+    return Number(raw);
   return null;
+}
+
+function normalizeSignatureBase64(val?: string) {
+  if (!val) return undefined;
+  const s = String(val);
+  const base64 = s.includes(",") ? s.split(",")[1] : s;
+  const trimmed = base64.trim();
+  return trimmed.length ? trimmed : undefined;
 }
 
 export async function createTourStop(data: {
@@ -42,16 +61,34 @@ export async function createTourStop(data: {
   // Gewicht primär aus Auftrag ableiten; falls nicht ermittelbar, optional übergebenen Wert verwenden
   const derivedGewicht = await deriveGewichtFromAuftrag(data.auftragId);
 
+  // Kunde laden, um Name/Adresse zu setzen (Quelle der Wahrheit)
+  let kundeNameFromDb: string | undefined;
+  let kundeAdressFromDb: string | undefined;
+  try {
+    const k: any = await (Kunde as any).findById(data.kundeId).lean();
+    if (k) {
+      // Versuche gängige Feldnamen; passe bei Bedarf an dein Schema an
+      kundeNameFromDb = k.name || k.firma || k.fullName || k.bezeichnung || undefined;
+      kundeAdressFromDb = k.adresse;
+    }
+  } catch {}
+
   const newStop = new TourStop({
     tourId: new Types.ObjectId(data.tourId),
     auftragId: new Types.ObjectId(data.auftragId),
     kundeId: new Types.ObjectId(data.kundeId),
-    kundeName: data.kundeName,
+    kundeName: data.kundeName ?? kundeNameFromDb,
+    kundeAdress: kundeAdressFromDb,
     position,
-    gewichtKg: derivedGewicht !== null ? derivedGewicht : (data.gewichtKg !== undefined && data.gewichtKg !== null ? Number(data.gewichtKg) : null),
+    gewichtKg:
+      derivedGewicht !== null
+        ? derivedGewicht
+        : data.gewichtKg !== undefined && data.gewichtKg !== null
+        ? Number(data.gewichtKg)
+        : null,
     status: data.status,
     fehlgrund: data.fehlgrund,
-    signaturPngBase64: data.signaturPngBase64,
+    signaturPngBase64: normalizeSignatureBase64(data.signaturPngBase64),
     signTimestampUtc: data.signTimestampUtc,
     signedByName: data.signedByName,
     leergutMitnahme: data.leergutMitnahme ?? [],
@@ -114,8 +151,22 @@ export async function updateTourStop(
   }
   if (data.status !== undefined) doc.status = data.status;
   if (data.fehlgrund !== undefined) doc.fehlgrund = data.fehlgrund;
-  if (data.signaturPngBase64 !== undefined)
-    doc.signaturPngBase64 = data.signaturPngBase64;
+  if (data.signaturPngBase64 !== undefined) {
+    const clean = normalizeSignatureBase64(data.signaturPngBase64 as any);
+    if (clean) {
+      doc.set("signaturPngBase64", clean);
+    } else {
+      // Leeren erlauben, falls der Client die Signatur zurückziehen möchte
+      doc.set("signaturPngBase64", undefined);
+    }
+    // Falls das Feld im Schema als Mixed oder select:false definiert ist:
+    try {
+      (doc as any).markModified?.("signaturPngBase64");
+    } catch {}
+  }
+  if (data.signaturPngBase64 !== undefined && !data.signTimestampUtc) {
+    doc.signTimestampUtc = new Date().toISOString();
+  }
   if (data.signTimestampUtc !== undefined)
     doc.signTimestampUtc = data.signTimestampUtc;
   if (data.signedByName !== undefined) doc.signedByName = data.signedByName;
@@ -127,6 +178,9 @@ export async function updateTourStop(
 
   return toResource(doc);
 }
+
+// Timer-Registry: verzögertes Löschen leerer Touren (Debounce 5s)
+const pendingDeleteTimers = new Map<string, NodeJS.Timeout>();
 
 /* --------------------------- Hilfsfunktionen --------------------------- */
 
@@ -233,6 +287,7 @@ function toResource(doc: any): TourStopResource {
     auftragId: doc.auftragId?.toString(),
     kundeId: doc.kundeId?.toString(),
     kundeName: doc.kundeName,
+    kundeAdress: (doc as any).kundeAdress,
     position: doc.position,
     gewichtKg: doc.gewichtKg ?? undefined,
     status: doc.status,
@@ -258,20 +313,42 @@ async function closeGapsAfterRemoval(
   );
 }
 
-// Leere Tour löschen (standardmäßig nur, wenn isStandard=true)
+// Löscht eine leere Tour erst NACH 5s, falls sie in der Zwischenzeit leer bleibt.
+// Hinweis: Der finale Delete läuft OHNE Session (außerhalb der ursprünglichen Transaktion).
 async function deleteTourIfEmpty(
   tourId: string,
-  session: ClientSession,
+  _session: ClientSession,
   onlyIfStandard = true
 ) {
-  const remaining = await TourStop.countDocuments({ tourId }).session(session);
-  if (remaining > 0) return;
+  // Sofortiger Check: wenn nicht leer → nichts tun
+  const remainingNow = await TourStop.countDocuments({ tourId }).session(
+    _session
+  );
+  if (remainingNow > 0) return;
 
-  const t = await Tour.findById(tourId).session(session).lean();
-  if (!t) return;
-  if (onlyIfStandard && !(t as any).isStandard) return;
+  // Bestehenden Timer für diese Tour abbrechen (debounce)
+  const existing = pendingDeleteTimers.get(tourId);
+  if (existing) clearTimeout(existing);
 
-  await Tour.deleteOne({ _id: tourId }, { session });
+  const timer = setTimeout(async () => {
+    try {
+      // Re-Check OHNE Session (Transaktion ist längst beendet)
+      const remaining = await TourStop.countDocuments({ tourId });
+      if (remaining > 0) return; // in der Zwischenzeit wieder befüllt
+
+      const t = await Tour.findById(tourId).lean();
+      if (!t) return;
+      if (onlyIfStandard && !(t as any).isStandard) return;
+
+      await Tour.deleteOne({ _id: tourId });
+    } catch (e) {
+      console.error("Delayed delete of empty tour failed", e);
+    } finally {
+      pendingDeleteTimers.delete(tourId);
+    }
+  }, 5000);
+
+  pendingDeleteTimers.set(tourId, timer);
 }
 
 /**
@@ -426,6 +503,7 @@ export async function moveTourStopAcrossTours(params: {
         auftragId: String(stop.auftragId),
         kundeId: String(stop.kundeId),
         kundeName: stop.kundeName as string | undefined,
+        kundeAdress: (stop as any).kundeAdress as string | undefined,
         gewichtKg: (stop.gewichtKg ?? undefined) as number | undefined,
         status: String(stop.status),
         fehlgrund: stop.fehlgrund as any,
@@ -459,6 +537,7 @@ export async function moveTourStopAcrossTours(params: {
         auftragId: new Types.ObjectId(payload.auftragId),
         kundeId: new Types.ObjectId(payload.kundeId),
         kundeName: payload.kundeName,
+        kundeAdress: (payload as any).kundeAdress,
         position: nextPos,
         gewichtKg: payload.gewichtKg ?? null,
         status: payload.status,

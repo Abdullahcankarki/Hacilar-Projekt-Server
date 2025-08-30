@@ -1,8 +1,6 @@
 // backend/src/routes/tourstop.routes.ts
 import { Router, Response } from "express";
 import { body, param, query } from "express-validator";
-
-
 import {
   createTourStop,
   getTourStopById,
@@ -13,11 +11,71 @@ import {
   moveTourStopAcrossTours,
 } from "../services/TourStopService";
 import { authenticate, AuthRequest, isAdmin, validate } from "./helper-hooks";
+import TourStop from "../model/TourStopModel";
+import Tour from "../model/TourModel";
+
+async function canEditStop(req: AuthRequest, res: Response, next: Function) {
+  try {
+    // Admin darf immer
+    if ((req.user as any)?.role === "admin") {
+      (req as any).allowedFieldsForRole = [
+        "position",
+        "gewichtKg",
+        "status",
+        "fehlgrund",
+        "signaturPngBase64",
+        "signTimestampUtc",
+        "signedByName",
+        "leergutMitnahme",
+        "abgeschlossenAm",
+      ];
+      return next();
+    }
+
+    const stopId = req.params.id;
+    if (!stopId) return res.status(400).json({ error: "Stop-ID fehlt" });
+
+    const stopDoc = await TourStop.findById(stopId).lean();
+    if (!stopDoc) return res.status(404).json({ error: "TourStop nicht gefunden" });
+
+    const tourDoc = await Tour.findById(stopDoc.tourId).lean();
+    if (!tourDoc) return res.status(404).json({ error: "Tour nicht gefunden" });
+
+    const userId = String((req.user as any)?._id || (req.user as any)?.id || "");
+    const isOwnTour = userId && String(tourDoc.fahrerId) === userId;
+    if (!isOwnTour) return res.status(403).json({ error: "Forbidden" });
+
+    // Fahrer: nur diese Felder editieren
+    (req as any).allowedFieldsForRole = [
+      "status",
+      "fehlgrund",
+      "signaturPngBase64",
+      "signTimestampUtc",
+      "signedByName",
+      "leergutMitnahme",
+      "abgeschlossenAm",
+    ];
+
+    return next();
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+}
 
 const tourStopRouter = Router();
 
 // Wenn du Stop-Status als Enum hast, trage ihn hier ein:
-const stopStatusValues = ["offen", "in_bearbeitung", "fertig", "abgebrochen"];
+const stopStatusValues = [
+  "offen",
+  "in_bearbeitung",
+  "fertig",
+  "abgebrochen",
+  // Fahrer-App Statuswerte
+  "unterwegs",
+  "zugestellt",
+  "fehlgeschlagen",
+  "teilweise",
+];
 
 /* ------------------------------- CREATE ------------------------------- */
 tourStopRouter.post(
@@ -101,12 +159,12 @@ tourStopRouter.get(
 tourStopRouter.patch(
   "/:id",
   authenticate,
-  isAdmin,
+  canEditStop,
   [
     param("id").isString().trim().notEmpty(),
-    body().custom((value) => {
+    body().custom((value, { req }) => {
       if (!value || typeof value !== "object") throw new Error("Body erforderlich");
-      const allowed = [
+      const fallbackAllowed = [
         "position",
         "gewichtKg",
         "status",
@@ -117,8 +175,14 @@ tourStopRouter.patch(
         "leergutMitnahme",
         "abgeschlossenAm",
       ];
-      if (!Object.keys(value).some((k) => allowed.includes(k))) {
+      const allowed: string[] = (req as any).allowedFieldsForRole || fallbackAllowed;
+      const keys = Object.keys(value);
+      if (!keys.some((k) => allowed.includes(k))) {
         throw new Error("Mindestens ein gültiges Feld muss übergeben werden");
+      }
+      // harte Prüfung: keine verbotenen Felder zulassen
+      for (const k of keys) {
+        if (!allowed.includes(k)) throw new Error(`Feld nicht erlaubt: ${k}`);
       }
       return true;
     }),

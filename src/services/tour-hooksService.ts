@@ -19,7 +19,27 @@ import { TourStop } from "../model/TourStopModel";
 import { Fahrzeug } from "../model/FahrzeugModel";
 import { RegionRule } from "../model/RegionRuleModel";
 import { ReihenfolgeVorlage } from "../model/ReihenfolgeVorlageModel";
+
 import { Kunde } from "../model/KundeModel";
+
+// Formatierte Kundenadresse (robust gegen verschiedene Feldnamen)
+function formatKundenAdresse(k: any): string | undefined {
+  if (!k) return undefined;
+  // 1) Direkte Felder bevorzugen
+  const direct = k.adresse || k.address || k.anschrift;
+  if (direct && String(direct).trim()) return String(direct).trim();
+  // 2) Aus Einzelteilen zusammensetzen
+  const strasse = k.strasse || k.straße || k.strasse1 || k.street || "";
+  const hausnr = k.hausnummer || k.nr || k.hausNr || "";
+  const line1 = [strasse, hausnr].filter(Boolean).join(" ").trim();
+  const plz = k.plz || k.postleitzahl || k.zip || "";
+  const ort = k.ort || k.stadt || k.city || "";
+  const line2 = [plz, ort].filter(Boolean).join(" ").trim();
+  const land = k.land || k.country || "";
+  const parts = [line1 || undefined, line2 || undefined, land || undefined].filter(Boolean);
+  const combined = parts.join(", ");
+  return combined || undefined;
+}
 
 // ---------------------- Public APIs ----------------------
 
@@ -100,6 +120,7 @@ export async function onAuftragLieferdatumSet(auftragId: string) {
               position: newPos,
               kundeId: k._id,
               kundeName: k.name,
+              kundeAdress: formatKundenAdresse(k),
               gewichtKg: a.gewicht ?? null,
             },
           },
@@ -143,6 +164,7 @@ export async function onAuftragLieferdatumSet(auftragId: string) {
             auftragId: a._id,
             kundeId: k._id,
             kundeName: k.name,
+            kundeAdress: formatKundenAdresse(k),
             position,
             gewichtKg: a.gewicht ?? null,
             status: "offen",
@@ -220,6 +242,7 @@ export async function onAuftragDatumOderRegionGeaendert(auftragId: string) {
               auftragId: a._id,
               kundeId: k._id,
               kundeName: k.name,
+              kundeAdress: formatKundenAdresse(k),
               position: pos,
               gewichtKg: a.gewicht ?? null,
               status: "offen",
@@ -284,6 +307,7 @@ export async function onAuftragDatumOderRegionGeaendert(auftragId: string) {
             position: targetPos,
             kundeId: k._id,
             kundeName: k.name,
+            kundeAdress: formatKundenAdresse(k),
             gewichtKg: a.gewicht ?? null,
           },
         },
@@ -330,6 +354,12 @@ export async function moveStopBetweenTours(params: {
       const stop = await TourStop.findById(params.stopId).session(session);
       if (!stop) throw new Error("Stop nicht gefunden");
 
+      let kundeAdress: string | undefined;
+      try {
+        const k = await Kunde.findById(stop.kundeId).session(session);
+        kundeAdress = formatKundenAdresse(k);
+      } catch {}
+
       const sourceTourId = String(stop.tourId);
       const targetTourId = String(params.targetTourId);
 
@@ -362,7 +392,13 @@ export async function moveStopBetweenTours(params: {
       // Stop umhängen
       await TourStop.updateOne(
         { _id: stop._id },
-        { $set: { tourId: new Types.ObjectId(targetTourId), position: targetPos } },
+        {
+          $set: {
+            tourId: new Types.ObjectId(targetTourId),
+            position: targetPos,
+            kundeAdress,
+          },
+        },
         { session }
       );
 

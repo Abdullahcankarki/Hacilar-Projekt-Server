@@ -208,6 +208,7 @@ export type TourStopResource = {
   auftragId: string;          // Verweis auf AuftragResource.id (1 Auftrag = 1 Stop)
   kundeId: string;            // denormalisiert für schnelle Customer-Sicht
   kundeName?: string;
+  kundeAdress?: string;
   position: number;           // Reihenfolge in der Tour (1..n)
   gewichtKg?: number;         // Summe aus Auftrag (Fallback)
   status: StopStatus;

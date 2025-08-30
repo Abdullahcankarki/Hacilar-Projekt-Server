@@ -37,6 +37,7 @@ app.use(cors({
   },
   credentials: true,
 }));
+app.use(express.json({ limit: '2mb' })); // oder mehr, je nach Bedarf
 app.use("/api/artikel", artikelRouter);
 app.use("/api/artikelPosition", artikelPositionRouter);
 app.use("/api/auftrag", auftragRouter);

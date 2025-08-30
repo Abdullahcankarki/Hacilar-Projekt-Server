@@ -1,6 +1,7 @@
 // backend/src/routes/tour.routes.ts
 import { Router, Response } from "express";
 import { body, param, query } from "express-validator";
+import { DateTime } from "luxon";
 
 import {
   createTour,
@@ -19,6 +20,71 @@ const tourRouter = Router();
 const isISODate = (v: any) => !Number.isNaN(new Date(v).valueOf());
 const tourStatus = ["geplant", "laufend", "abgeschlossen", "archiviert"];
 
+function toISODateBerlinSafe(input: any): string | null {
+  if (!input) return null;
+  const Z = "Europe/Berlin" as const;
+  let dt = DateTime.fromISO(String(input), { zone: Z });
+  if (!dt.isValid) dt = DateTime.fromFormat(String(input), "dd.LL.yyyy", { zone: Z });
+  if (!dt.isValid) dt = DateTime.fromFormat(String(input), "yyyyLLdd", { zone: Z });
+  if (!dt.isValid) {
+    const js = new Date(String(input));
+    if (!Number.isNaN(js.valueOf())) dt = DateTime.fromJSDate(js, { zone: Z });
+  }
+  return dt.isValid ? dt.toISODate() : null;
+}
+
+// Middleware: Admin always; Driver only if assigned to the tour and tour date is today (Europe/Berlin)
+async function canEditTour(req: AuthRequest, res: Response, next: Function) {
+  try {
+    const user = req.user as any;
+    if (user?.role.includes("admin") ) {
+      // Admin: full set of allowed fields
+      (req as any).allowedFieldsForRole = [
+        "datum",
+        "region",
+        "name",
+        "status",
+        "fahrzeugId",
+        "fahrerId",
+        "maxGewichtKg",
+        "reihenfolgeVorlageId",
+        "isStandard",
+        "parentTourId",
+        "splitIndex",
+        "archiviertAm",
+      ];
+      return next();
+    }
+
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ error: "ID ist erforderlich" });
+
+    let tour;
+    try {
+      tour = await getTourById(id);
+    } catch (e: any) {
+      return res.status(404).json({ error: "Tour nicht gefunden" });
+    }
+    if (!tour) return res.status(404).json({ error: "Tour nicht gefunden" });
+
+    const isOwn =
+      String(tour.fahrerId || "") === String(user?._id || user?.id || "");
+    const todayBerlin = DateTime.now().setZone("Europe/Berlin").toISODate();
+    const tourDate = toISODateBerlinSafe((tour as any).datum);
+    const isToday = !!todayBerlin && !!tourDate && todayBerlin === tourDate;
+
+    if (!isOwn || !isToday) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // Fahrer: nur sichere Felder (z. B. Statusänderung)
+    (req as any).allowedFieldsForRole = ["status"]; // ggf. erweitern, wenn gewünscht
+    return next();
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 /* ------------------------------- CREATE ------------------------------- */
 tourRouter.post(
   "/",
@@ -26,15 +92,26 @@ tourRouter.post(
   isAdmin,
   [
     body("datum")
-      .exists().withMessage("datum ist erforderlich")
-      .custom(isISODate).withMessage("datum muss ein gültiges Datum sein"),
+      .exists()
+      .withMessage("datum ist erforderlich")
+      .custom(isISODate)
+      .withMessage("datum muss ein gültiges Datum sein"),
     body("region")
-      .isString().trim().notEmpty().withMessage("region ist erforderlich"),
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage("region ist erforderlich"),
     body("name").optional().isString().trim(),
     body("fahrzeugId").optional().isString().trim(),
     body("fahrerId").optional().isString().trim(),
-    body("maxGewichtKg").optional().isNumeric().withMessage("maxGewichtKg muss eine Zahl sein"),
-    body("status").optional().isIn(tourStatus).withMessage(`status muss eines von ${tourStatus.join(", ")} sein`),
+    body("maxGewichtKg")
+      .optional()
+      .isNumeric()
+      .withMessage("maxGewichtKg muss eine Zahl sein"),
+    body("status")
+      .optional()
+      .isIn(tourStatus)
+      .withMessage(`status muss eines von ${tourStatus.join(", ")} sein`),
     body("reihenfolgeVorlageId").optional().isString().trim(),
     body("isStandard").optional().isBoolean().toBoolean(),
     body("parentTourId").optional().isString().trim(),
@@ -60,7 +137,8 @@ tourRouter.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const result = await getTourById(req.params.id);
-      if (!result) return res.status(404).json({ error: "Tour nicht gefunden" });
+      if (!result)
+        return res.status(404).json({ error: "Tour nicht gefunden" });
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -73,8 +151,14 @@ tourRouter.get(
   "/",
   authenticate,
   [
-    query("dateFrom").optional().custom(isISODate).withMessage("dateFrom muss ein gültiges Datum sein"),
-    query("dateTo").optional().custom(isISODate).withMessage("dateTo muss ein gültiges Datum sein"),
+    query("dateFrom")
+      .optional()
+      .custom(isISODate)
+      .withMessage("dateFrom muss ein gültiges Datum sein"),
+    query("dateTo")
+      .optional()
+      .custom(isISODate)
+      .withMessage("dateTo muss ein gültiges Datum sein"),
     query("region").optional().isString().trim(),
     query("status").optional().isString().trim().isIn(tourStatus),
     query("status[]").optional().isArray(), // falls du mehrfach-Status als Array sendest
@@ -103,7 +187,10 @@ tourRouter.get(
         status: statusParam,
         fahrzeugId: req.query.fahrzeugId as any,
         fahrerId: req.query.fahrerId as any,
-        isStandard: req.query.isStandard === undefined ? undefined : (req.query.isStandard as any),
+        isStandard:
+          req.query.isStandard === undefined
+            ? undefined
+            : (req.query.isStandard as any),
         q: req.query.q as any,
         page: (req.query.page as any) ?? 1,
         limit: (req.query.limit as any) ?? 50,
@@ -120,19 +207,35 @@ tourRouter.get(
 tourRouter.patch(
   "/:id",
   authenticate,
-  isAdmin,
+  canEditTour,
   [
     param("id").isString().notEmpty(),
-    body().custom((value) => {
-      if (!value || typeof value !== "object") throw new Error("Body erforderlich");
-      const allowed = [
-        "datum","region","name","fahrzeugId","fahrerId",
-        "maxGewichtKg","status","reihenfolgeVorlageId",
-        "isStandard","parentTourId","splitIndex","archiviertAm"
+    body().custom((value, { req }) => {
+      if (!value || typeof value !== "object")
+        throw new Error("Body erforderlich");
+      const fallbackAllowed = [
+        "datum",
+        "region",
+        "name",
+        "fahrzeugId",
+        "fahrerId",
+        "maxGewichtKg",
+        "status",
+        "reihenfolgeVorlageId",
+        "isStandard",
+        "parentTourId",
+        "splitIndex",
+        "archiviertAm",
       ];
+      const allowed: string[] =
+        (req as any).allowedFieldsForRole || fallbackAllowed;
       const keys = Object.keys(value);
       if (!keys.some((k) => allowed.includes(k))) {
         throw new Error("Mindestens ein gültiges Feld muss übergeben werden");
+      }
+      // Keine verbotenen Felder zulassen
+      for (const k of keys) {
+        if (!allowed.includes(k)) throw new Error(`Feld nicht erlaubt: ${k}`);
       }
       return true;
     }),
