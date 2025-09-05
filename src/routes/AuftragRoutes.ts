@@ -1,5 +1,5 @@
 import express, { Request, Response, NextFunction } from "express";
-import { body, param, validationResult } from "express-validator";
+import { body, param, query, validationResult } from "express-validator";
 import jwt from "jsonwebtoken";
 import {
   createAuftrag,
@@ -159,6 +159,34 @@ auftragRouter.post(
 auftragRouter.get(
   "/",
   authenticate,
+  [
+    query("page").optional().isInt({ min: 1 }).toInt(),
+    query("limit").optional().isInt({ min: 1 }).toInt(),
+    query("status").optional().isIn(["offen", "in Bearbeitung", "abgeschlossen", "storniert"]),
+    query("statusIn").optional().isString(), // comma-separated
+    query("kunde").optional().isMongoId(),
+    query("auftragsnummer").optional().isString(),
+    query("q").optional().isString(),
+    query("lieferdatumVon").optional().isISO8601(),
+    query("lieferdatumBis").optional().isISO8601(),
+    query("createdVon").optional().isISO8601(),
+    query("createdBis").optional().isISO8601(),
+    query("updatedVon").optional().isISO8601(),
+    query("updatedBis").optional().isISO8601(),
+    query("kommissioniertStatus").optional().isIn(["offen", "gestartet", "fertig"]),
+    query("kontrolliertStatus").optional().isIn(["offen", "geprüft"]),
+    query("bearbeiter").optional().isString(),
+    query("kommissioniertVon").optional().isMongoId(),
+    query("kontrolliertVon").optional().isMongoId(),
+    query("hasTour").optional().isBoolean().toBoolean(),
+    query("sort").optional().isIn([
+      "createdAtDesc", "createdAtAsc",
+      "updatedAtDesc", "updatedAtAsc",
+      "lieferdatumAsc", "lieferdatumDesc",
+      "auftragsnummerAsc", "auftragsnummerDesc",
+    ]),
+  ],
+  validate,
   async (req: AuthRequest, res: Response) => {
     try {
       if (!req.user?.role.includes("admin")) {
@@ -166,7 +194,55 @@ auftragRouter.get(
           .status(403)
           .json({ error: "Nur Admins können alle Aufträge abrufen" });
       }
-      const result = await getAllAuftraege();
+
+      const {
+        page,
+        limit,
+        status,
+        statusIn,
+        kunde,
+        auftragsnummer,
+        q,
+        lieferdatumVon,
+        lieferdatumBis,
+        createdVon,
+        createdBis,
+        updatedVon,
+        updatedBis,
+        kommissioniertStatus,
+        kontrolliertStatus,
+        bearbeiter,
+        kommissioniertVon,
+        kontrolliertVon,
+        hasTour,
+        sort,
+      } = req.query as any;
+
+      const params: any = {};
+      if (page !== undefined) params.page = Number(page);
+      if (limit !== undefined) params.limit = Number(limit);
+      if (status) params.status = String(status);
+      if (statusIn) params.statusIn = String(statusIn).split(",").map((s) => s.trim()).filter(Boolean);
+      if (kunde) params.kunde = String(kunde);
+      if (auftragsnummer) params.auftragsnummer = String(auftragsnummer);
+      if (q) params.q = String(q);
+      if (lieferdatumVon) params.lieferdatumVon = String(lieferdatumVon);
+      if (lieferdatumBis) params.lieferdatumBis = String(lieferdatumBis);
+      if (createdVon) params.createdVon = String(createdVon);
+      if (createdBis) params.createdBis = String(createdBis);
+      if (updatedVon) params.updatedVon = String(updatedVon);
+      if (updatedBis) params.updatedBis = String(updatedBis);
+      if (kommissioniertStatus) params.kommissioniertStatus = String(kommissioniertStatus);
+      if (kontrolliertStatus) params.kontrolliertStatus = String(kontrolliertStatus);
+      if (bearbeiter) params.bearbeiter = String(bearbeiter);
+      if (kommissioniertVon) params.kommissioniertVon = String(kommissioniertVon);
+      if (kontrolliertVon) params.kontrolliertVon = String(kontrolliertVon);
+      if (typeof hasTour === "boolean" || hasTour === "true" || hasTour === "false") {
+        params.hasTour = hasTour === true || hasTour === "true";
+      }
+      if (sort) params.sort = String(sort);
+
+      const result = await getAllAuftraege(params);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

@@ -160,8 +160,27 @@ tourRouter.get(
       .custom(isISODate)
       .withMessage("dateTo muss ein gültiges Datum sein"),
     query("region").optional().isString().trim(),
-    query("status").optional().isString().trim().isIn(tourStatus),
-    query("status[]").optional().isArray(), // falls du mehrfach-Status als Array sendest
+    // status kann als Komma-String oder als Array kommen; beide Fälle validieren
+    query("status")
+      .optional()
+      .custom((v) => {
+        if (Array.isArray(v)) {
+          return v.every((x) => tourStatus.includes(String(x)));
+        }
+        const arr = String(v)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        return arr.every((x) => tourStatus.includes(x));
+      })
+      .withMessage(`status muss eines von ${tourStatus.join(", ")} sein (einzeln oder kommasepariert)`),
+    query("status[]")
+      .optional()
+      .custom((v) => {
+        const arr = Array.isArray(v) ? v : [v];
+        return arr.every((x) => tourStatus.includes(String(x)));
+      })
+      .withMessage(`status[] muss nur Werte aus ${tourStatus.join(", ")} enthalten`),
     query("fahrzeugId").optional().isString().trim(),
     query("fahrerId").optional().isString().trim(),
     query("isStandard").optional().isBoolean().toBoolean(),

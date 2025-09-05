@@ -5,6 +5,7 @@ import { TourStop } from "../model/TourStopModel";
 import { Auftrag } from "../model/AuftragModel";
 import { Fahrzeug } from "../model/FahrzeugModel";
 import { recomputeTourWeight, updateOverCapacityFlag } from "./tour-hooksService"; // falls anderer Pfad: anpassen
+import { DateTime } from "luxon";
 import { TourResource, TourStatus } from "src/Resources";
 
 
@@ -14,17 +15,50 @@ function normalizeRegion(v?: string | null): string {
   return (v ?? "").trim();
 }
 
-// Tagesbeginn (UTC). Falls du Europe/Berlin willst, passe hier an.
+// Tagesbeginn in Europe/Berlin, robust gegen verschiedene Eingabeformate
 function normalizeTourDate(d: Date | string): Date {
-  const n = new Date(d);
-  n.setUTCHours(0, 0, 0, 0);
-  return n;
+  const Z = "Europe/Berlin" as const;
+  let dt = d instanceof Date ? DateTime.fromJSDate(d, { zone: Z }) : DateTime.fromISO(String(d), { zone: Z });
+  if (!dt.isValid) dt = DateTime.fromFormat(String(d), "dd.LL.yyyy", { zone: Z });
+  if (!dt.isValid) dt = DateTime.fromFormat(String(d), "yyyyLLdd", { zone: Z });
+  if (!dt.isValid) {
+    const js = new Date(String(d));
+    if (!Number.isNaN(js.valueOf())) dt = DateTime.fromJSDate(js, { zone: Z });
+  }
+  if (!dt.isValid) return new Date(NaN);
+  // Start of local day, then convert to UTC Date for storage/query
+  const startLocal = dt.startOf("day");
+  return new Date(startLocal.toUTC().toISO());
+}
+
+function toISODateBerlinFromDoc(d: any): string | undefined {
+  if (!d) return undefined;
+  const Z = "Europe/Berlin" as const;
+  // Case A: native Date
+  if (d instanceof Date && !Number.isNaN(d.valueOf())) {
+    const dt = DateTime.fromJSDate(d, { zone: Z });
+    return dt.isValid ? dt.toISODate() ?? undefined : undefined;
+  }
+  // Case B: Mongoose Date-like (e.g., doc.get("datum"))
+  try {
+    const asDate = new Date(d as any);
+    if (!Number.isNaN(asDate.valueOf())) {
+      const dt = DateTime.fromJSDate(asDate, { zone: Z });
+      return dt.isValid ? dt.toISODate() ?? undefined : undefined;
+    }
+  } catch {}
+  // Case C: ISO date string already
+  if (typeof d === "string") {
+    const iso = DateTime.fromISO(d, { zone: Z });
+    if (iso.isValid) return iso.toISODate() ?? undefined;
+  }
+  return undefined;
 }
 
 function toResource(doc: any): TourResource {
   return {
     id: doc._id.toString(),
-    datum: doc.datum,
+    datum: toISODateBerlinFromDoc(doc.datum) as any,
     region: doc.region,
     name: doc.name ?? undefined,
     fahrzeugId: doc.fahrzeugId ? String(doc.fahrzeugId) : undefined,
@@ -109,11 +143,46 @@ export async function listTours(params?: {
 
   const filter: FilterQuery<any> = {};
 
-  if (params?.dateFrom || params?.dateTo) {
-    filter.datum = {};
-    if (params.dateFrom) (filter.datum as any).$gte = normalizeTourDate(params.dateFrom);
-    if (params.dateTo) (filter.datum as any).$lte = normalizeTourDate(params.dateTo);
+if (params?.dateFrom || params?.dateTo) {
+  const Z = "Europe/Berlin" as const;
+
+  // inklusiv: [from..to] in lokaler Berlin-Zeit
+  const fromLocal = params?.dateFrom
+    ? DateTime.fromISO(String(params.dateFrom), { zone: Z }).startOf("day")
+    : null;
+  const toLocal = params?.dateTo
+    ? DateTime.fromISO(String(params.dateTo), { zone: Z }).endOf("day")
+    : null;
+
+  const fromUtc = fromLocal?.isValid ? fromLocal.toUTC() : null;
+  const toUtc = toLocal?.isValid ? toLocal.toUTC() : null;
+
+  // Fall A: datum ist als Date gespeichert
+  const dateBoundsDate: any = {
+    ...(fromUtc ? { $gte: new Date(fromUtc.toISO()) } : {}),
+    ...(toUtc ? { $lte: new Date(toUtc.toISO()) } : {}),
+  };
+
+  // Fall B: datum ist als String "YYYY-MM-DD" gespeichert
+  const fromStr = fromLocal?.isValid ? fromLocal.toFormat("yyyy-LL-dd") : undefined;
+  const toStr = toLocal?.isValid ? toLocal.toFormat("yyyy-LL-dd") : undefined;
+  const dateBoundsString: any = {
+    ...(fromStr ? { $gte: fromStr } : {}),
+    ...(toStr ? { $lte: toStr } : {}),
+  };
+
+  // Matche entweder Date- oder String-Speicherung
+  if (Object.keys(dateBoundsDate).length && Object.keys(dateBoundsString).length) {
+    filter.$or = [
+      { datum: dateBoundsDate },
+      { datum: dateBoundsString },
+    ];
+  } else if (Object.keys(dateBoundsDate).length) {
+    filter.datum = dateBoundsDate;
+  } else if (Object.keys(dateBoundsString).length) {
+    filter.datum = dateBoundsString;
   }
+}
 
   if (params?.region) filter.region = normalizeRegion(params.region);
   if (params?.fahrzeugId) filter.fahrzeugId = new Types.ObjectId(params.fahrzeugId);
@@ -121,16 +190,26 @@ export async function listTours(params?: {
   if (typeof params?.isStandard === "boolean") filter.isStandard = params.isStandard;
 
   if (params?.status) {
-    if (Array.isArray(params.status)) filter.status = { $in: params.status };
-    else filter.status = params.status;
+    const raw = params.status as any;
+    const arr = Array.isArray(raw)
+      ? raw
+      : String(raw)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+    if (arr.length <= 1) {
+      filter.status = arr.length === 1 ? arr[0] : raw;
+    } else {
+      filter.status = { $in: arr };
+    }
   }
 
   if (params?.q) {
     filter.name = { $regex: params.q.trim(), $options: "i" };
   }
 
-  let sort: any = { datum: 1, splitIndex: 1 };
-  if (params?.sort === "datumDesc") sort = { datum: -1, splitIndex: 1 };
+  let sort: any = { datum: 1, splitIndex: 1, createdAt: 1 };
+  if (params?.sort === "datumDesc") sort = { datum: -1, splitIndex: 1, createdAt: 1 };
   if (params?.sort === "createdDesc") sort = { createdAt: -1 };
 
   const [docs, total] = await Promise.all([

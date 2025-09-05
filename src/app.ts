@@ -14,6 +14,7 @@ import regionRuleRouter from './routes/RegionRuleRoutes';
 import reihenfolgeVorlageRouter from './routes/ReihenfolgeVorlageRoutes';
 import tourRouter from './routes/TourRoutes';
 import tourStopRouter from './routes/TourStopRoutes';
+import samsara from './api/samsara'
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '2mb' })); // oder mehr, je nach Bedarf
+app.use('/api', samsara);
 app.use("/api/artikel", artikelRouter);
 app.use("/api/artikelPosition", artikelPositionRouter);
 app.use("/api/auftrag", auftragRouter);

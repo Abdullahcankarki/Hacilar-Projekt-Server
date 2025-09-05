@@ -28,21 +28,32 @@ async function generiereAuftragsnummer(): Promise<string> {
 async function computeTotals(
   auftrag: IAuftrag
 ): Promise<{ totalWeight: number; totalPrice: number }> {
-  // Lade alle ArtikelPositionen, die in diesem Auftrag referenziert werden
-  const positions: IArtikelPosition[] = await ArtikelPosition.find({
-    _id: { $in: auftrag.artikelPosition },
-  });
+  const ids = Array.isArray(auftrag.artikelPosition)
+    ? (auftrag.artikelPosition as unknown[]).filter(Boolean).map((x: any) => x.toString())
+    : [];
+  if (!ids.length) return { totalWeight: 0, totalPrice: 0 };
 
-  const totalWeight = positions.reduce((sum, pos) => {
-    const brutto = (pos as any).bruttogewicht;
-    const gewicht =
-      typeof brutto === "number" && !Number.isNaN(brutto)
-        ? brutto
-        : pos.gesamtgewicht || 0;
-    return sum + gewicht;
-  }, 0);
-  const totalPrice = positions.reduce((sum, pos) => sum + pos.gesamtpreis, 0);
+  const agg = await ArtikelPosition.aggregate([
+    { $match: { _id: { $in: ids.map((s) => new mongoose.Types.ObjectId(s)) } } },
+    {
+      $group: {
+        _id: null,
+        totalWeight: {
+          $sum: {
+            $ifNull: [
+              // bevorzugt bruttogewicht, fallback gesamtgewicht
+              "$bruttogewicht",
+              { $ifNull: ["$gesamtgewicht", 0] }
+            ],
+          },
+        },
+        totalPrice: { $sum: { $ifNull: ["$gesamtpreis", 0] } },
+      },
+    },
+  ]);
 
+  if (!agg.length) return { totalWeight: 0, totalPrice: 0 };
+  const { totalWeight, totalPrice } = agg[0] as { totalWeight: number; totalPrice: number };
   return { totalWeight, totalPrice };
 }
 
@@ -61,7 +72,7 @@ function convertAuftragToResource(
       typeof auftrag.kunde === "string"
         ? auftrag.kunde
         : auftrag.kunde?._id?.toString() || "",
-    kundeName: (auftrag as any).kunde?.name || "",
+    kundeName: (typeof (auftrag as any).kunde === "object" && (auftrag as any).kunde?.name) ? (auftrag as any).kunde.name : "",
     artikelPosition: Array.isArray(auftrag.artikelPosition)
       ? auftrag.artikelPosition.map((id) => id?.toString()).filter(Boolean)
       : [],
@@ -127,12 +138,15 @@ export async function createAuftrag(data: {
  * Dabei werden die Gesamtwerte berechnet und als Teil der Resource zurückgegeben.
  */
 export async function getAuftragById(id: string): Promise<AuftragResource> {
-  const auftrag = await Auftrag.findById(id).populate("kunde", "name");
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new Error("Ungültige ID");
+  }
+  const auftrag = await Auftrag.findById(id).populate("kunde", "name").lean();
   if (!auftrag) {
     throw new Error("Auftrag nicht gefunden");
   }
-  const totals = await computeTotals(auftrag);
-  return convertAuftragToResource(auftrag, totals);
+  const totals = await computeTotals(auftrag as unknown as IAuftrag);
+  return convertAuftragToResource(auftrag as unknown as IAuftrag, totals);
 }
 
 /**
@@ -142,15 +156,14 @@ export async function getAuftragById(id: string): Promise<AuftragResource> {
 export async function getAuftraegeByCustomerId(
   kundenId: string
 ): Promise<AuftragResource[]> {
-  const auftraege = await Auftrag.find({ kunde: kundenId }).populate(
-    "kunde",
-    "name"
-  );
+  const auftraege = await Auftrag.find({ kunde: kundenId })
+    .populate("kunde", "name")
+    .lean();
 
   return Promise.all(
     auftraege.map(async (auftrag) => {
-      const totals = await computeTotals(auftrag);
-      return convertAuftragToResource(auftrag, totals);
+      const totals = await computeTotals(auftrag as unknown as IAuftrag);
+      return convertAuftragToResource(auftrag as unknown as IAuftrag, totals);
     })
   );
 }
@@ -158,12 +171,104 @@ export async function getAuftraegeByCustomerId(
  * Ruft alle Aufträge ab.
  * Für jeden Auftrag werden Gesamtgewicht und Gesamtpreis berechnet.
  */
-export async function getAllAuftraege(): Promise<AuftragResource[]> {
-  const auftraege = await Auftrag.find().populate("kunde", "name");
+export async function getAllAuftraege(params?: {
+  page?: number;
+  limit?: number;
+  // Filters
+  status?: "offen" | "in Bearbeitung" | "abgeschlossen" | "storniert";
+  statusIn?: Array<"offen" | "in Bearbeitung" | "abgeschlossen" | "storniert">;
+  kunde?: string;
+  auftragsnummer?: string; // exact or regex (prefix/substring)
+  q?: string; // free text search over auftragsnummer and kundeName (if populated)
+  lieferdatumVon?: string;
+  lieferdatumBis?: string;
+  createdVon?: string;
+  createdBis?: string;
+  updatedVon?: string;
+  updatedBis?: string;
+  kommissioniertStatus?: "offen" | "gestartet" | "fertig";
+  kontrolliertStatus?: "offen" | "geprüft";
+  bearbeiter?: string; // user id or name stored in field
+  kommissioniertVon?: string; // user id
+  kontrolliertVon?: string; // user id
+  hasTour?: boolean; // filter by existence of tourId
+  // Sorting (DB-sortable only)
+  sort?:
+    | "createdAtDesc" | "createdAtAsc"
+    | "updatedAtDesc" | "updatedAtAsc"
+    | "lieferdatumAsc" | "lieferdatumDesc"
+    | "auftragsnummerAsc" | "auftragsnummerDesc";
+}): Promise<AuftragResource[]> {
+  // If no `limit` is provided, return all matching records (no pagination). When provided, cap to 200 and paginate.
+  const page = Math.max(1, params?.page ?? 1);
+  const hasLimit = typeof params?.limit === 'number' && !Number.isNaN(params?.limit as number);
+  const limit = hasLimit ? Math.min(200, Math.max(1, params!.limit as number)) : undefined;
+
+  const q: any = {};
+  // Simple equals / $in filters
+  if (params?.status) q.status = params.status;
+  if (params?.statusIn?.length) q.status = { $in: params.statusIn };
+  if (params?.kunde) q.kunde = params.kunde;
+  if (params?.kommissioniertStatus) q.kommissioniertStatus = params.kommissioniertStatus;
+  if (params?.kontrolliertStatus) q.kontrolliertStatus = params.kontrolliertStatus;
+  if (params?.bearbeiter) q.bearbeiter = params.bearbeiter;
+  if (params?.kommissioniertVon) q.kommissioniertVon = params.kommissioniertVon;
+  if (params?.kontrolliertVon) q.kontrolliertVon = params.kontrolliertVon;
+  if (typeof params?.hasTour === 'boolean') q.tourId = params.hasTour ? { $exists: true, $ne: null } : { $in: [null], $exists: false };
+
+  // Date ranges
+  const addDateRange = (field: string, from?: string, to?: string) => {
+    if (!from && !to) return;
+    q[field] = {};
+    if (from) q[field].$gte = new Date(from);
+    if (to) q[field].$lte = new Date(to);
+  };
+  addDateRange('lieferdatum', params?.lieferdatumVon, params?.lieferdatumBis);
+  addDateRange('createdAt', params?.createdVon, params?.createdBis);
+  addDateRange('updatedAt', params?.updatedVon, params?.updatedBis);
+
+  // auftragsnummer exact/regex
+  if (params?.auftragsnummer) {
+    // If it contains regex meta, treat as regex; else use case-insensitive substring
+    const v = params.auftragsnummer;
+    const isRegex = /[.*+?^${}()|\[\]\\]/.test(v);
+    q.auftragsnummer = isRegex ? { $regex: v } : { $regex: v, $options: 'i' };
+  }
+
+  // Text search over auftragsnummer + (optional) populated kundeName via $expr (fallback, since kundeName isn't stored)
+  // We keep it simple: when q is provided, apply it to auftragsnummer only on the DB side;
+  // Frontend can additionally filter by kundeName after mapping if needed.
+  if (params?.q) {
+    q.auftragsnummer = { $regex: params.q, $options: 'i' };
+  }
+
+  // Sorting (only DB fields)
+  let sort: any = { createdAt: -1 };
+  switch (params?.sort) {
+    case 'createdAtAsc': sort = { createdAt: 1 }; break;
+    case 'updatedAtDesc': sort = { updatedAt: -1 }; break;
+    case 'updatedAtAsc': sort = { updatedAt: 1 }; break;
+    case 'lieferdatumAsc': sort = { lieferdatum: 1 }; break;
+    case 'lieferdatumDesc': sort = { lieferdatum: -1 }; break;
+    case 'auftragsnummerAsc': sort = { auftragsnummer: 1 }; break;
+    case 'auftragsnummerDesc': sort = { auftragsnummer: -1 }; break;
+    default: sort = { createdAt: -1 }; // createdAtDesc
+  }
+
+  let query = Auftrag.find(q)
+    .populate('kunde', 'name')
+    .sort(sort);
+
+  if (hasLimit && typeof limit === 'number') {
+    query = query.skip((page - 1) * limit).limit(limit);
+  }
+
+  const auftraege = await query.lean();
+
   return Promise.all(
     auftraege.map(async (auftrag) => {
-      const totals = await computeTotals(auftrag);
-      return convertAuftragToResource(auftrag, totals);
+      const totals = await computeTotals(auftrag as unknown as IAuftrag);
+      return convertAuftragToResource(auftrag as unknown as IAuftrag, totals);
     })
   );
 }
@@ -195,7 +300,9 @@ export async function updateAuftrag(
     kontrolliertZeit: string;
   }>
 ): Promise<AuftragResource> {
-
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new Error("Ungültige ID");
+  }
   // Hilfsfunktion für robusten Date-Vergleich (null-safe)
   const toDateOrNull = (v: unknown): Date | null => {
     if (!v) return null;
@@ -309,21 +416,30 @@ export async function getLetzterAuftragMitPositionenByKundenId(
     _id: { $in: auftrag.artikelPosition },
   });
 
-  const positionResources: ArtikelPositionResource[] = await Promise.all(
-    positionen.map(async (pos) => {
-      const artikel = await getArtikelById(pos.artikel.toString(), kundenId);
-      return {
-        id: pos._id.toString(),
-        artikel: pos.artikel.toString(),
-        artikelName: pos.artikelName,
-        menge: pos.menge,
-        einheit: pos.einheit,
-        einzelpreis: artikel.preis,
-        gesamtgewicht: pos.gesamtgewicht,
-        gesamtpreis: pos.gesamtpreis,
-      };
+  // Deduplicate Artikel-IDs and fetch in parallel (still using getArtikelById to respect pricing rules)
+  const uniqueArtikelIds = Array.from(new Set(positionen.map((p) => p.artikel?.toString()).filter(Boolean) as string[]));
+  const artikelMap = new Map<string, any>();
+  await Promise.all(
+    uniqueArtikelIds.map(async (aid) => {
+      const a = await getArtikelById(aid, kundenId);
+      artikelMap.set(aid, a);
     })
   );
+
+  const positionResources: ArtikelPositionResource[] = positionen.map((pos) => {
+    const aid = pos.artikel?.toString();
+    const artikel = aid ? artikelMap.get(aid) : undefined;
+    return {
+      id: pos._id.toString(),
+      artikel: aid || "",
+      artikelName: pos.artikelName,
+      menge: pos.menge,
+      einheit: pos.einheit,
+      einzelpreis: artikel?.preis,
+      gesamtgewicht: pos.gesamtgewicht,
+      gesamtpreis: pos.gesamtpreis,
+    };
+  });
 
   return {
     auftrag: auftragResource,
@@ -359,6 +475,9 @@ export async function getLetzterArtikelFromAuftragByKundenId(
 }
 
 export async function deleteAuftrag(id: string): Promise<void> {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new Error("Ungültige ID");
+  }
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
@@ -407,10 +526,14 @@ export async function deleteAllAuftraege(): Promise<void> {
       // 2) Alle ArtikelPositionen und Zerlegeaufträge löschen (batch)
       const alleArtikelPositionen = auftraege.flatMap((a) => a.artikelPosition ?? []);
       if (alleArtikelPositionen.length > 0) {
-        await ArtikelPosition.deleteMany({ _id: { $in: alleArtikelPositionen } }).session(session);
-        await ZerlegeAuftragModel.deleteMany({
-          "artikelPositionen.artikelPositionId": { $in: alleArtikelPositionen },
-        }).session(session);
+        const CHUNK = 10000;
+        for (let i = 0; i < alleArtikelPositionen.length; i += CHUNK) {
+          const slice = alleArtikelPositionen.slice(i, i + CHUNK);
+          await ArtikelPosition.deleteMany({ _id: { $in: slice } }).session(session);
+          await ZerlegeAuftragModel.deleteMany({
+            "artikelPositionen.artikelPositionId": { $in: slice },
+          }).session(session);
+        }
       }
 
       // 3) Alle Aufträge löschen
@@ -430,38 +553,34 @@ export async function getAlleAuftraegeInBearbeitung(
   isKommissionierer: boolean
 ): Promise<AuftragResource[]> {
   if (isKommissionierer) {
-    // Falls der aktuelle Kommissionierer bereits einen "gestarteten" Auftrag hat, gib nur diesen zurück
     const eigenerGestarteterAuftrag = await Auftrag.findOne({
       kommissioniertVon: currentUserId,
       kommissioniertStatus: "gestartet",
-    }).populate("kunde", "name");
+    })
+      .populate("kunde", "name")
+      .lean();
 
-    if (eigenerGestarteterAuftrag) {
-      const totals = await computeTotals(eigenerGestarteterAuftrag);
-      return [convertAuftragToResource(eigenerGestarteterAuftrag, totals)];
-    } else {
-      const auftraege = await Auftrag.find({
-        status: "in Bearbeitung",
-        kommissioniertStatus: "offen",
-      }).populate("kunde", "name");
-      return Promise.all(
-        auftraege.map(async (auftrag) => {
-          const totals = await computeTotals(auftrag);
-          return convertAuftragToResource(auftrag, totals);
-        })
-      );
-    }
+    const list = eigenerGestarteterAuftrag
+      ? [eigenerGestarteterAuftrag]
+      : await Auftrag.find({ status: "in Bearbeitung", kommissioniertStatus: "offen" })
+          .populate("kunde", "name")
+          .lean();
+
+    return Promise.all(
+      list.map(async (auftrag) => {
+        const totals = await computeTotals(auftrag as unknown as IAuftrag);
+        return convertAuftragToResource(auftrag as unknown as IAuftrag, totals);
+      })
+    );
   }
 
-  // Andernfalls alle Aufträge mit Status "in Bearbeitung"
-  const auftraege = await Auftrag.find({ status: "in Bearbeitung" }).populate(
-    "kunde",
-    "name"
-  );
+  const auftraege = await Auftrag.find({ status: "in Bearbeitung" })
+    .populate("kunde", "name")
+    .lean();
   return Promise.all(
     auftraege.map(async (auftrag) => {
-      const totals = await computeTotals(auftrag);
-      return convertAuftragToResource(auftrag, totals);
+      const totals = await computeTotals(auftrag as unknown as IAuftrag);
+      return convertAuftragToResource(auftrag as unknown as IAuftrag, totals);
     })
   );
 }

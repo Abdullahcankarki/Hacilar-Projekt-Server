@@ -586,3 +586,182 @@ export async function moveTourStopAcrossTours(params: {
     await session.endSession();
   }
 }
+
+// --- Geocoding (Kunde -> lat/lng). Versucht erst DB-Felder, dann Nominatim (OSM), inkl. kleinem Memory-Cache.
+const geocodeCache = new Map<string, { lat: number; lng: number }>();
+
+async function getCoordsForKunde(kundeId: string, fallbackAddress?: string): Promise<{ lat?: number; lng?: number }> {
+  // 1) Memory-Cache nach Adresse nutzen (wenn vorhanden)
+  if (fallbackAddress) {
+    const hit = geocodeCache.get(fallbackAddress.trim().toLowerCase());
+    if (hit) return hit;
+  }
+
+  try {
+    // 2) Kunde aus DB lesen und offensichtliche Felder prüfen
+    const k: any = await (Kunde as any).findById(kundeId).lean();
+    if (k) {
+      const lat = Number(k?.lat ?? k?.latitude ?? k?.geo?.lat ?? k?.location?.coordinates?.[1]);
+      const lng = Number(k?.lng ?? k?.longitude ?? k?.geo?.lng ?? k?.location?.coordinates?.[0]);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+    }
+
+    // 3) Wenn keine Koordinaten, optional aus Adresse geokodieren
+    const address = (k?.adresse || fallbackAddress || '').toString().trim();
+    if (!address) return {};
+
+    // Nominatim-Geocoding (OSM). Bitte respektvoll nutzen; idealerweise Server-seitig mit Cache.
+    const params = new URLSearchParams({
+      format: 'json',
+      q: address,
+      limit: '1',
+      addressdetails: '0',
+    });
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+      headers: { 'User-Agent': 'HacilarNeu/1.0 (server geocoder)' }
+    });
+    if (!res.ok) return {};
+    const arr: any[] = await res.json();
+    const first = Array.isArray(arr) ? arr[0] : null;
+    const lat = Number(first?.lat);
+    const lng = Number(first?.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      // Cache im Speicher
+      if (address) geocodeCache.set(address.trim().toLowerCase(), { lat, lng });
+      // Optional: in Kunde-Dokument persistieren (best-effort)
+      try {
+        if (k && !k.geo) {
+          await (Kunde as any).updateOne({ _id: kundeId }, { $set: { geo: { lat, lng } } });
+        }
+      } catch {}
+      return { lat, lng };
+    }
+  } catch {}
+  return {};
+}
+
+// --- Zusatz: Helper für YYYY-MM-DD in Europe/Berlin
+function todayYmdBerlin(): string {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const parts = fmt.formatToParts(now);
+  const y = parts.find(p => p.type === 'year')?.value;
+  const m = parts.find(p => p.type === 'month')?.value;
+  const d = parts.find(p => p.type === 'day')?.value;
+  return `${y}-${m}-${d}`;
+}
+
+/** Liefert Start/Ende des angegebenen YYYY-MM-DD (Europe/Berlin) als echte Date-Instants (UTC). */
+function berlinDayRange(dateYmd: string): { from: Date; to: Date } {
+  const [Y, M, D] = dateYmd.split('-').map(Number);
+  // UTC-Mitternacht dieses Kalendertages (YYYY-MM-DD)
+  const t0 = Date.UTC(Y, M - 1, D, 0, 0, 0, 0);
+  // Wie spät ist es in Berlin zu diesem UTC-Zeitpunkt?
+  const fmt = new Intl.DateTimeFormat('de-DE', {
+    timeZone: 'Europe/Berlin',
+    hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  const p = fmt.formatToParts(new Date(t0));
+  const hh = Number(p.find(x => x.type === 'hour')?.value || '0');
+  const mm = Number(p.find(x => x.type === 'minute')?.value || '0');
+  const ss = Number(p.find(x => x.type === 'second')?.value || '0');
+  // Offset in Minuten (z.B. 120 für UTC+2). Berlin-Mitternacht = UTC-Mitternacht minus Offset
+  const offsetMs = ((hh * 60) + mm) * 60 * 1000 + (ss * 1000);
+  const fromMs = t0 - offsetMs;
+  const toMs = fromMs + (24 * 60 * 60 * 1000) - 1; // Ende des Tages
+  return { from: new Date(fromMs), to: new Date(toMs) };
+}
+
+/**
+ * Liefert alle Kunden-Stopps (kundeId, kundeName, kundeAdress) für alle Touren am angegebenen Tag.
+ * - Default: HEUTE (Europe/Berlin)
+ * - Optionaler Filter: fahrerId, region
+ * - Sortierung: TourStop.position ASC
+ */
+export async function listCustomerStopsForDate(params?: {
+  dateYmd?: string;      // YYYY-MM-DD (Europe/Berlin)
+  fahrerId?: string;     // optionaler Filter
+  region?: string;       // optionaler Filter (exakt gleich)
+}): Promise<Array<{
+  tourId: string;
+  stopId: string;
+  kundeId: string;
+  kundeName?: string;
+  kundeAdress?: string;
+  position: number;
+  lat?: number;
+  lng?: number;
+}>> {
+  const dateYmd = params?.dateYmd || todayYmdBerlin();
+
+  // 1) Alle Touren am Tag (optional gefiltert) – Feld `datum` ist ein Date
+  const { from, to } = berlinDayRange(dateYmd);
+  const tourQuery: any = { datum: { $gte: from, $lte: to } };
+  if (params?.fahrerId) tourQuery.fahrerId = params.fahrerId;
+  if (params?.region) tourQuery.region = params.region;
+
+  const tours: Array<any> = await (Tour as any).find(tourQuery, { _id: 1 }).lean();
+  if (!tours.length) return [];
+
+  const tourIds = tours.map(t => String(t._id));
+
+  // 2) Alle Stops der gefundenen Touren, sortiert
+  const stops = await TourStop.find({ tourId: { $in: tourIds } })
+    .sort({ position: 1 })
+    .lean();
+
+  // 3) Falls Name/Adresse fehlen, optional Kunde nachladen (minimiert, per Batch)
+  const missingKundeIds = Array.from(new Set(
+    stops
+      .filter(s => (!s.kundeName || !(s as any).kundeAdress) && s.kundeId)
+      .map(s => String(s.kundeId))
+  ));
+
+  let kundenById: Record<string, { name?: string; adresse?: string }> = {};
+  if (missingKundeIds.length) {
+    try {
+      const kunden = await (Kunde as any).find(
+        { _id: { $in: missingKundeIds.map(id => new Types.ObjectId(id)) } },
+        { _id: 1, name: 1, firma: 1, fullName: 1, bezeichnung: 1, adresse: 1 }
+      ).lean();
+      kundenById = (kunden || []).reduce((acc: any, k: any) => {
+        acc[String(k._id)] = {
+          name: k.name || k.firma || k.fullName || k.bezeichnung,
+          adresse: k.adresse,
+        };
+        return acc;
+      }, {} as Record<string, { name?: string; adresse?: string }>);
+    } catch {}
+  }
+
+  // 3b) Koordinaten ermitteln (aus Kunde.geo oder via Geocoding) – best-effort
+  const coordsByKunde: Record<string, { lat?: number; lng?: number }> = {};
+  const uniqueKundeIds = Array.from(new Set(stops.map(s => String(s.kundeId)).filter(Boolean)));
+  for (const kid of uniqueKundeIds) {
+    const fallbackAddr = kundenById[kid]?.adresse;
+    try {
+      coordsByKunde[kid] = await getCoordsForKunde(kid, fallbackAddr);
+    } catch {
+      coordsByKunde[kid] = {};
+    }
+  }
+
+  // 4) Ausgabe normalisieren
+  const result = stops.map((s: any) => {
+    const kid = String(s.kundeId);
+    const fallback = kundenById[kid] || {};
+    return {
+      tourId: String(s.tourId),
+      stopId: String(s._id),
+      kundeId: kid,
+      kundeName: s.kundeName || fallback.name,
+      kundeAdress: (s as any).kundeAdress || fallback.adresse,
+      position: typeof s.position === 'number' ? s.position : 0,
+      lat: coordsByKunde[kid]?.lat,
+      lng: coordsByKunde[kid]?.lng,
+    };
+  });
+
+  return result;
+}

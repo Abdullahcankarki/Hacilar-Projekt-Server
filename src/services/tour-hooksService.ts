@@ -9,8 +9,8 @@
 // - moveStopBetweenTours (manuelles Verschieben/Drag&Drop)
 
 import mongoose, { ClientSession, Types } from "mongoose";
-import { format } from "date-fns";
-import { de } from "date-fns/locale";
+
+import { DateTime } from "luxon";
 
 // ❗️ Passen die Import-Pfade bei dir an (Model-Dateinamen können abweichen)
 import { Auftrag } from "../model/AuftragModel";
@@ -41,6 +41,20 @@ function formatKundenAdresse(k: any): string | undefined {
   return combined || undefined;
 }
 
+// Liefert den Tagesbeginn (Europe/Berlin) als UTC-Date-Objekt
+function normalizeToBerlinStartOfDay(d: any): Date {
+  const Z = "Europe/Berlin" as const;
+  let dt = d instanceof Date ? DateTime.fromJSDate(d, { zone: Z }) : DateTime.fromISO(String(d), { zone: Z });
+  if (!dt.isValid) dt = DateTime.fromFormat(String(d), "dd.LL.yyyy", { zone: Z });
+  if (!dt.isValid) dt = DateTime.fromFormat(String(d), "yyyyLLdd", { zone: Z });
+  if (!dt.isValid) {
+    const js = new Date(String(d));
+    if (!Number.isNaN(js.valueOf())) dt = DateTime.fromJSDate(js, { zone: Z });
+  }
+  const localStart = dt.startOf("day");
+  return localStart.toUTC().toJSDate();
+}
+
 // ---------------------- Public APIs ----------------------
 
 /**
@@ -63,9 +77,10 @@ export async function onAuftragLieferdatumSet(auftragId: string) {
       if (!k) throw new Error("Kunde nicht gefunden");
 
       const region = normalizeRegion(k.region);
-      await validateRegionRuleOrThrow(region, a.lieferdatum, session);
+      const lieferdatumNorm = normalizeToBerlinStartOfDay(a.lieferdatum);
+      await validateRegionRuleOrThrow(region, lieferdatumNorm, session);
 
-      const tour = await Tour.findOrCreateStandard(a.lieferdatum, region, { session });
+      const tour = await Tour.findOrCreateStandard(lieferdatumNorm, region, { session });
       if (!tour?._id) throw new Error("Ziel-Tour konnte nicht ermittelt/erstellt werden");
 
       // Prüfe, ob bereits ein Stop existiert
@@ -204,9 +219,10 @@ export async function onAuftragDatumOderRegionGeaendert(auftragId: string) {
       if (!k) throw new Error("Kunde nicht gefunden");
 
       const region = normalizeRegion(k.region);
-      await validateRegionRuleOrThrow(region, a.lieferdatum, session);
+      const lieferdatumNorm = normalizeToBerlinStartOfDay(a.lieferdatum);
+      await validateRegionRuleOrThrow(region, lieferdatumNorm, session);
 
-      const target = await Tour.findOrCreateStandard(a.lieferdatum, region, { session });
+      const target = await Tour.findOrCreateStandard(lieferdatumNorm, region, { session });
       if (!target?._id) throw new Error("Ziel-Tour konnte nicht ermittelt/erstellt werden");
 
       // Alle aktuellen Stops für Auftrag (robuster als findOne)
@@ -470,11 +486,11 @@ async function validateRegionRuleOrThrow(region: string, lieferdatum: Date, sess
   const rule = await RegionRule.findOne({ region: region, aktiv: true }).session(session);
   if (!rule) return; // keine Regel -> alles erlaubt
 
-  // weekday als deutscher Name (z. B. "Montag")
-  const weekdayDe = format(new Date(lieferdatum), "EEEE", { locale: de });
+  const Z = "Europe/Berlin" as const;
+  const dt = DateTime.fromJSDate(lieferdatum, { zone: Z }).setLocale("de");
+  const weekdayDe = dt.toFormat("cccc"); // z. B. "Montag"
   const erlaubt = rule.erlaubteTage?.includes(weekdayDe);
   if (!erlaubt) {
-    // FIX: fehlendes Template-Literal
     throw new Error(`Für Region ${region} sind Bestellungen an ${weekdayDe} nicht erlaubt.`);
   }
 }

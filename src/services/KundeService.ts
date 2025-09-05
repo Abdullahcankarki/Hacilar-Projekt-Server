@@ -348,6 +348,37 @@ export async function logoutKunde(): Promise<string> {
   return "Logout erfolgreich";
 }
 
+/**
+ * Setzt das Passwort eines Kunden anhand der E-Mail neu.
+ * Wird vom Passwort-Reset (Option B) verwendet.
+ */
+export async function updateKundePasswordByEmail(emailRaw: string, newPassword: string): Promise<void> {
+  const email = normalizeEmail(emailRaw);
+  if (!email) throw new Error("E-Mail ist erforderlich");
+  if (!newPassword || newPassword.length < 6) throw new Error("Passwort muss mind. 6 Zeichen lang sein");
+
+  const kunde = await Kunde.findOne({ email });
+  if (!kunde) {
+    // absichtlich generische Meldung, um Enumeration zu vermeiden
+    throw new Error("Kunde nicht gefunden: " + email);
+  }
+
+  const hashed = await bcrypt.hash(newPassword, 10);
+  (kunde as any).password = hashed;
+  await kunde.save();
+}
+
+/**
+ * Prüft, ob ein Kunde mit dieser E-Mail existiert (normalisiert).
+ * Wird genutzt, um Reset-Mails nur an echte Kunden zu senden.
+ */
+export async function kundeExistsByEmail(emailRaw: string): Promise<boolean> {
+  const email = normalizeEmail(emailRaw);
+  if (!email) return false;
+  const kunde = await Kunde.findOne({ email });
+  return !!kunde;
+}
+
 export async function getKundenFavoriten(
   kundenId: string,
   currentUser: LoginResource

@@ -31,6 +31,25 @@ const JWT_EXPIRES_SECONDS = Number(process.env.JWT_EXPIRES_SECONDS || 60 * 60 * 
 function norm(s?: string) {
   return (s || "").trim();
 }
+/**
+ * Setzt das Passwort eines Mitarbeiters anhand des (normalisierten) Namens neu.
+ * Wird vom Passwort-Reset (Option B) verwendet.
+ */
+export async function updateMitarbeiterPasswordByName(nameRaw: string, newPassword: string): Promise<void> {
+  const name = normLower(nameRaw);
+  if (!name) throw new Error("Name ist erforderlich");
+  if (!newPassword || newPassword.length < 6) throw new Error("Passwort muss mind. 6 Zeichen lang sein");
+
+  const mitarbeiter = await Mitarbeiter.findOne({ name });
+  if (!mitarbeiter) {
+    // absichtlich generische Meldung, um Enumeration zu vermeiden
+    throw new Error("Mitarbeiter nicht gefunden");
+  }
+
+  const hashed = await bcrypt.hash(newPassword, 10);
+  (mitarbeiter as any).password = hashed;
+  await mitarbeiter.save();
+}
 function normLower(s?: string) {
   return (s || "").trim().toLowerCase();
 }

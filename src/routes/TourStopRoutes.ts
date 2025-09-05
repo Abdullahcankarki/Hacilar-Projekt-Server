@@ -9,6 +9,7 @@ import {
   deleteTourStop,
   deleteAllTourStops,
   moveTourStopAcrossTours,
+  listCustomerStopsForDate,
 } from "../services/TourStopService";
 import { authenticate, AuthRequest, isAdmin, validate } from "./helper-hooks";
 import TourStop from "../model/TourStopModel";
@@ -147,6 +148,30 @@ tourStopRouter.get(
         tourId: req.query.tourId as string | undefined,
         auftragId: req.query.auftragId as string | undefined,
         kundeId: req.query.kundeId as string | undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/* ----------------------- LIST CUSTOMER STOPS FOR DATE ----------------------- */
+tourStopRouter.get(
+  "/customers/by-date",
+  authenticate,
+  [
+    query("date").optional().isString().trim(), // YYYY-MM-DD (Europe/Berlin)
+    query("fahrerId").optional().isString().trim(),
+    query("region").optional().isString().trim(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await listCustomerStopsForDate({
+        dateYmd: req.query.date as string | undefined,
+        fahrerId: req.query.fahrerId as string | undefined,
+        region: req.query.region as string | undefined,
       });
       res.json(result);
     } catch (error: any) {

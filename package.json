@@ -18,6 +18,7 @@
     "@types/jsonwebtoken": "^9.0.9",
     "@types/luxon": "^3.7.1",
     "@types/node": "^20.5.9",
+    "@types/nodemailer": "^7.0.1",
     "@types/supertest": "^2.0.12",
     "bestzip": "^2.2.1",
     "cross-env": "^7.0.3",
@@ -49,6 +50,7 @@
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.1",
     "mongoose": "^7.5.0",
+    "nodemailer": "^7.0.6",
     "serialport": "^13.0.0",
     "winston": "^3.10.0"
   },
