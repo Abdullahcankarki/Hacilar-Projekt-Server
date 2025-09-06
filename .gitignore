@@ -24,4 +24,4 @@ abgabe*.zip
 # Grading input and output folders
 gradingIn
 gradingOut
-plag*.*
+plag*.*.env
