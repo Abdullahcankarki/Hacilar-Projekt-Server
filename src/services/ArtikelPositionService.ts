@@ -100,7 +100,7 @@ export async function createArtikelPosition(data: {
   });
 
   const savedPosition = await newPosition.save();
-// Test
+
   // Artikelposition-ID zum Auftrag hinzufügen, wenn Auftrag angegeben wurde
   if (data.auftragId) {
     const auftrag = await Auftrag.findById(data.auftragId);
