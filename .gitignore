@@ -10,6 +10,7 @@ node_modules
 .eslintcache
 .tsbuildinfo
 # macos specific files
+.env
 .DS_Store
 # test output
 junit.xml
