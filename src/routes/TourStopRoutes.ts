@@ -10,6 +10,7 @@ import {
   deleteAllTourStops,
   moveTourStopAcrossTours,
   listCustomerStopsForDate,
+  getTourStopByKundeIdHeute,
 } from "../services/TourStopService";
 import { authenticate, AuthRequest, isAdmin, validate } from "./helper-hooks";
 import TourStop from "../model/TourStopModel";
@@ -173,6 +174,22 @@ tourStopRouter.get(
         fahrerId: req.query.fahrerId as string | undefined,
         region: req.query.region as string | undefined,
       });
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/* ----------------------- LIST CUSTOMER STOPS FOR TODAY ----------------------- */
+tourStopRouter.get(
+  "/customers/today/:kundeId",
+  authenticate,
+  [param("kundeId").isString().trim().notEmpty()],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await getTourStopByKundeIdHeute(req.params.kundeId);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

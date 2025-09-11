@@ -8,7 +8,7 @@ import { ArtikelPositionResource, AuftragResource } from "../Resources"; // Pfad
 import { getArtikelById } from "../services/ArtikelService";
 import { Mitarbeiter } from "../model/MitarbeiterModel";
 import { Counter } from "../model/CounterModel";
-import { onAuftragLieferdatumSet, onAuftragDatumOderRegionGeaendert, removeAllStopsForAuftrag } from "./tour-hooksService";
+import { onAuftragLieferdatumSet, onAuftragDatumOderRegionGeaendert, removeAllStopsForAuftrag, onAuftragGewichtGeaendert } from "./tour-hooksService";
 import mongoose from "mongoose";
 
 async function generiereAuftragsnummer(): Promise<string> {
@@ -130,6 +130,15 @@ export async function createAuftrag(data: {
 
   const savedAuftrag = await newAuftrag.save();
   const totals = await computeTotals(savedAuftrag);
+  // Persistiere die berechneten Totale auch im Auftrag-Dokument (falls Felder im Schema vorhanden sind)
+  try {
+    await Auftrag.updateOne(
+      { _id: savedAuftrag._id },
+      { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }
+    );
+  } catch (e) {
+    console.warn('[createAuftrag] Konnte gewicht/preis nicht persistieren (Schema ohne Felder?)', (e as Error)?.message);
+  }
   return convertAuftragToResource(savedAuftrag, totals);
 }
 
@@ -392,6 +401,16 @@ export async function updateAuftrag(
 
   // 6) Totals & Rückgabe
   const totals = await computeTotals(updatedAuftrag);
+  // Persistiere neue Totale im Auftrag-Dokument und synchronisiere TourStops
+  try {
+    await Auftrag.updateOne(
+      { _id: updatedAuftrag._id },
+      { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }
+    );
+    await onAuftragGewichtGeaendert(updatedAuftrag._id.toString());
+  } catch (e) {
+    console.warn('[updateAuftrag] Persist/Synchronize gewicht/preis fehlgeschlagen:', (e as Error)?.message);
+  }
   return convertAuftragToResource(updatedAuftrag, totals);
 }
 

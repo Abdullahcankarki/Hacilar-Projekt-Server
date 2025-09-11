@@ -371,9 +371,14 @@ export async function moveStopBetweenTours(params: {
       if (!stop) throw new Error("Stop nicht gefunden");
 
       let kundeAdress: string | undefined;
+      let auftragGewicht: number | null | undefined;
       try {
         const k = await Kunde.findById(stop.kundeId).session(session);
         kundeAdress = formatKundenAdresse(k);
+      } catch {}
+      try {
+        const a = await Auftrag.findById(stop.auftragId).session(session);
+        auftragGewicht = (a?.gewicht ?? null) as any;
       } catch {}
 
       const sourceTourId = String(stop.tourId);
@@ -413,6 +418,7 @@ export async function moveStopBetweenTours(params: {
             tourId: new Types.ObjectId(targetTourId),
             position: targetPos,
             kundeAdress,
+            gewichtKg: auftragGewicht ?? stop.gewichtKg ?? null,
           },
         },
         { session }
@@ -441,6 +447,39 @@ export async function moveStopBetweenTours(params: {
   }
 }
 
+/**
+ * Wird aufgerufen, wenn sich das Gewicht eines Auftrags ändert.
+ * - Überträgt das Gewicht auf alle zugehörigen TourStops
+ * - Rechnet betroffene Touren neu
+ */
+export async function onAuftragGewichtGeaendert(auftragId: string) {
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const a = await Auftrag.findById(auftragId).session(session);
+      if (!a) return;
+      const gewicht = (a.gewicht ?? null) as any;
+
+      const stops = await TourStop.find({ auftragId: a._id }).session(session);
+      if (!stops.length) return;
+
+      // Update alle Stops mit neuem Gewicht
+      const tourIds = new Set<string>();
+      for (const s of stops) {
+        await TourStop.updateOne({ _id: s._id }, { $set: { gewichtKg: gewicht } }, { session });
+        tourIds.add(String(s.tourId));
+      }
+
+      // Betroffene Touren neu rechnen
+      for (const tId of tourIds) {
+        await recomputeTourWeight(tId, session);
+        await updateOverCapacityFlag(tId, session);
+      }
+    });
+  } finally {
+    await session.endSession();
+  }
+}
 // ---------------------- Helfer/Util ----------------------
 
 export async function recomputeTourWeight(tourId: string, session?: mongoose.ClientSession) {
