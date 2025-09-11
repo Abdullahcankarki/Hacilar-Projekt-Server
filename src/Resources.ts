@@ -184,7 +184,8 @@ export type FahrzeugResource = {
 
 export type TourResource = {
   id?: string;
-  datum: Date;              
+  datum: Date;                 // als Date gespeichert
+  datumIso?: string;           // zusätzlich als YYYY-MM-DD String für Filter
   region: string;             // Freitext (normalisiert)
   name?: string;              // z. B. "Berlin #2"
   fahrzeugId?: string;        // Verweis auf FahrzeugResource.id

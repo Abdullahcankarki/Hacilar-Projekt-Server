@@ -1,4 +1,44 @@
 import { ZerlegeAuftragModel } from "../model/ZerlegeAuftragModel";
+import { DateTime } from "luxon";
+
+const ZONE = "Europe/Berlin" as const;
+
+export function parseBerlinYmdToUtcDate(input?: string | Date): Date | undefined {
+  if (!input) return undefined;
+
+  // Bereits ein Date-Objekt?
+  if (input instanceof Date) {
+    // Annahme: bereits ein absoluter Zeitpunkt; in JS-Date ist intern UTC.
+    return input;
+  }
+
+  const raw = String(input).trim();
+
+  // Wenn ein Zeitanteil (T hh:mm) oder eine Zone (Z / ±hh:mm) vorhanden ist,
+  // dann NICHT kürzen, sondern 1:1 respektieren.
+  const hasTime = /T\d{2}:\d{2}/.test(raw);
+  const hasZone = /Z|[+-]\d{2}:\d{2}$/.test(raw);
+
+  if (hasTime || hasZone) {
+    const dt = DateTime.fromISO(raw);
+    if (!dt.isValid) return undefined;
+    return new Date(dt.toUTC().toISO()!);
+  }
+
+  // Nur Datum (YYYY-MM-DD): als Berlin-Kalendertag interpretieren (00:00 in Berlin)
+  const dt = DateTime.fromISO(raw, { zone: ZONE });
+  if (!dt.isValid) return undefined;
+  const berlinStart = dt.startOf('day');
+  return new Date(berlinStart.toUTC().toISO()!);
+}
+
+function berlinIsoFromDate(d?: Date | string | null): string | undefined {
+  if (!d) return undefined;
+  const js = d instanceof Date ? d : new Date(String(d));
+  if (Number.isNaN(js.valueOf())) return undefined;
+  const dt = DateTime.fromJSDate(js, { zone: ZONE });
+  return dt.isValid ? dt.toISODate() ?? undefined : undefined;
+}
 import { Auftrag, IAuftrag } from "../model/AuftragModel"; // Pfad ggf. anpassen
 import {
   ArtikelPosition,
@@ -77,9 +117,7 @@ function convertAuftragToResource(
       ? auftrag.artikelPosition.map((id) => id?.toString()).filter(Boolean)
       : [],
     status: auftrag.status,
-    lieferdatum: auftrag.lieferdatum
-      ? auftrag.lieferdatum.toISOString()
-      : undefined,
+    lieferdatum: berlinIsoFromDate(auftrag.lieferdatum),
     bemerkungen: auftrag.bemerkungen,
     createdAt: auftrag.createdAt ? auftrag.createdAt.toISOString() : undefined,
     updatedAt: auftrag.updatedAt ? auftrag.updatedAt.toISOString() : undefined,
@@ -119,16 +157,25 @@ export async function createAuftrag(data: {
   bemerkungen?: string;
 }): Promise<AuftragResource> {
   const neueNummer = await generiereAuftragsnummer();
+  const parsedLieferdatumCreate = parseBerlinYmdToUtcDate(data.lieferdatum);
   const newAuftrag = new Auftrag({
     auftragsnummer: neueNummer,
     kunde: data.kunde,
     artikelPosition: data.artikelPosition,
     status: data.status ?? "offen",
-    lieferdatum: data.lieferdatum ? new Date(data.lieferdatum) : undefined,
+    lieferdatum: parsedLieferdatumCreate,
     bemerkungen: data.bemerkungen,
   });
 
   const savedAuftrag = await newAuftrag.save();
+  // Standard-Tour nur erzeugen, wenn bereits ein Lieferdatum gesetzt ist (Frontend setzt es i.d.R. beim Update)
+  if (savedAuftrag.lieferdatum) {
+    try {
+      await onAuftragLieferdatumSet(savedAuftrag._id.toString());
+    } catch (err) {
+      console.error("[createAuftrag] onAuftragLieferdatumSet fehlgeschlagen:", (err as Error)?.message);
+    }
+  }
   const totals = await computeTotals(savedAuftrag);
   // Persistiere die berechneten Totale auch im Auftrag-Dokument (falls Felder im Schema vorhanden sind)
   try {
@@ -228,9 +275,16 @@ export async function getAllAuftraege(params?: {
   // Date ranges
   const addDateRange = (field: string, from?: string, to?: string) => {
     if (!from && !to) return;
-    q[field] = {};
-    if (from) q[field].$gte = new Date(from);
-    if (to) q[field].$lte = new Date(to);
+    const range: any = {};
+    if (from) {
+      const f = DateTime.fromISO(String(from), { zone: ZONE }).startOf("day").toUTC();
+      if (f.isValid) range.$gte = new Date(f.toISO()!);
+    }
+    if (to) {
+      const t = DateTime.fromISO(String(to), { zone: ZONE }).endOf("day").toUTC();
+      if (t.isValid) range.$lte = new Date(t.toISO()!);
+    }
+    if (Object.keys(range).length) q[field] = range;
   };
   addDateRange('lieferdatum', params?.lieferdatumVon, params?.lieferdatumBis);
   addDateRange('createdAt', params?.createdVon, params?.createdBis);
@@ -338,8 +392,8 @@ export async function updateAuftrag(
   if (data.status) updateData.status = data.status;
 
   if (data.lieferdatum !== undefined) {
-    const parsed = toDateOrNull(data.lieferdatum);
-    if (!parsed) throw new Error("Ungültiges Lieferdatum");
+    const parsed = parseBerlinYmdToUtcDate(data.lieferdatum);
+    if (!parsed) throw new Error('Ungültiges Lieferdatum');
     updateData.lieferdatum = parsed;
   }
 

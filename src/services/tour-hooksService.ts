@@ -77,10 +77,19 @@ export async function onAuftragLieferdatumSet(auftragId: string) {
       if (!k) throw new Error("Kunde nicht gefunden");
 
       const region = normalizeRegion(k.region);
-      const lieferdatumNorm = normalizeToBerlinStartOfDay(a.lieferdatum);
-      await validateRegionRuleOrThrow(region, lieferdatumNorm, session);
+      const lieferdatumDirekt = (a.lieferdatum instanceof Date) ? a.lieferdatum : new Date(String(a.lieferdatum));
+      await validateRegionRuleOrThrow(region, lieferdatumDirekt, session);
 
-      const tour = await Tour.findOrCreateStandard(lieferdatumNorm, region, { session });
+      const tour = await Tour.findOrCreateStandard(lieferdatumDirekt, region, { session });
+      // Safety: Falls Altbestand ohne datumIso, jetzt nachziehen (Datum auffüllen falls fehlend)
+      if (tour?.datum && !(tour as any).datumIso) {
+        const js = (tour.datum instanceof Date) ? tour.datum : new Date(String(tour.datum));
+        const iso = DateTime.fromJSDate(js, { zone: "Europe/Berlin" }).toISODate();
+        if (iso) {
+          await Tour.updateOne({ _id: tour._id }, { $set: { datumIso: iso } }, { session });
+          (tour as any).datumIso = iso;
+        }
+      }
       if (!tour?._id) throw new Error("Ziel-Tour konnte nicht ermittelt/erstellt werden");
 
       // Prüfe, ob bereits ein Stop existiert
@@ -219,10 +228,19 @@ export async function onAuftragDatumOderRegionGeaendert(auftragId: string) {
       if (!k) throw new Error("Kunde nicht gefunden");
 
       const region = normalizeRegion(k.region);
-      const lieferdatumNorm = normalizeToBerlinStartOfDay(a.lieferdatum);
-      await validateRegionRuleOrThrow(region, lieferdatumNorm, session);
+      const lieferdatumDirekt = (a.lieferdatum instanceof Date) ? a.lieferdatum : new Date(String(a.lieferdatum));
+      await validateRegionRuleOrThrow(region, lieferdatumDirekt, session);
 
-      const target = await Tour.findOrCreateStandard(lieferdatumNorm, region, { session });
+      const target = await Tour.findOrCreateStandard(lieferdatumDirekt, region, { session });
+      // Safety: Altbestand ohne datumIso -> nachziehen
+      if (target?.datum && !(target as any).datumIso) {
+        const js = (target.datum instanceof Date) ? target.datum : new Date(String(target.datum));
+        const iso = DateTime.fromJSDate(js, { zone: "Europe/Berlin" }).toISODate();
+        if (iso) {
+          await Tour.updateOne({ _id: target._id }, { $set: { datumIso: iso } }, { session });
+          (target as any).datumIso = iso;
+        }
+      }
       if (!target?._id) throw new Error("Ziel-Tour konnte nicht ermittelt/erstellt werden");
 
       // Alle aktuellen Stops für Auftrag (robuster als findOne)

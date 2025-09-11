@@ -55,10 +55,18 @@ function toISODateBerlinFromDoc(d: any): string | undefined {
   return undefined;
 }
 
+function getBerlinISODateInput(d: Date | string): string | undefined {
+  // If already YYYY-MM-DD, trust and return
+  if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) return d.trim();
+  // Otherwise reuse existing converter
+  return toISODateBerlinFromDoc(d as any);
+}
+
 function toResource(doc: any): TourResource {
   return {
     id: doc._id.toString(),
-    datum: toISODateBerlinFromDoc(doc.datum) as any,
+    datum: (doc.datum instanceof Date) ? doc.datum : new Date(doc.datum),
+    datumIso: doc.datumIso ?? toISODateBerlinFromDoc(doc.datum),
     region: doc.region,
     name: doc.name ?? undefined,
     fahrzeugId: doc.fahrzeugId ? String(doc.fahrzeugId) : undefined,
@@ -92,8 +100,10 @@ export async function createTour(data: {
   parentTourId?: string;
   splitIndex?: number;
 }): Promise<TourResource> {
+  const datumIso = getBerlinISODateInput(data.datum);
   const doc = await new Tour({
     datum: normalizeTourDate(data.datum),
+    datumIso: datumIso ?? null,
     region: normalizeRegion(data.region),
     name: data.name?.trim(),
     fahrzeugId: data.fahrzeugId ? new Types.ObjectId(data.fahrzeugId) : null,
@@ -143,46 +153,55 @@ export async function listTours(params?: {
 
   const filter: FilterQuery<any> = {};
 
-if (params?.dateFrom || params?.dateTo) {
-  const Z = "Europe/Berlin" as const;
+  if (params?.dateFrom || params?.dateTo) {
+    // Prefer string range on datumIso (robust, TZ-agnostic)
+    const directFrom = typeof params?.dateFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(params.dateFrom.trim())
+      ? params.dateFrom.trim()
+      : undefined;
+    const directTo = typeof params?.dateTo === "string" && /^\d{4}-\d{2}-\d{2}$/.test(params.dateTo.trim())
+      ? params.dateTo.trim()
+      : undefined;
 
-  // inklusiv: [from..to] in lokaler Berlin-Zeit
-  const fromLocal = params?.dateFrom
-    ? DateTime.fromISO(String(params.dateFrom), { zone: Z }).startOf("day")
-    : null;
-  const toLocal = params?.dateTo
-    ? DateTime.fromISO(String(params.dateTo), { zone: Z }).endOf("day")
-    : null;
+    const Z = "Europe/Berlin" as const;
+    const fromLocal = directFrom
+      ? DateTime.fromISO(directFrom, { zone: Z })
+      : (params?.dateFrom ? DateTime.fromISO(String(params.dateFrom), { zone: Z }).startOf("day") : null);
+    const toLocal = directTo
+      ? DateTime.fromISO(directTo, { zone: Z })
+      : (params?.dateTo ? DateTime.fromISO(String(params.dateTo), { zone: Z }).endOf("day") : null);
 
-  const fromUtc = fromLocal?.isValid ? fromLocal.toUTC() : null;
-  const toUtc = toLocal?.isValid ? toLocal.toUTC() : null;
+    const fromUtc = fromLocal && fromLocal.isValid ? fromLocal.toUTC() : null;
+    const toUtc = toLocal && toLocal.isValid ? toLocal.toUTC() : null;
 
-  // Fall A: datum ist als Date gespeichert
-  const dateBoundsDate: any = {
-    ...(fromUtc ? { $gte: new Date(fromUtc.toISO()) } : {}),
-    ...(toUtc ? { $lte: new Date(toUtc.toISO()) } : {}),
-  };
+    // Bounds for legacy Date storage
+    const dateBoundsDate: any = {
+      ...(fromUtc ? { $gte: new Date(fromUtc.toISO()) } : {}),
+      ...(toUtc ? { $lte: new Date(toUtc.toISO()) } : {}),
+    };
 
-  // Fall B: datum ist als String "YYYY-MM-DD" gespeichert
-  const fromStr = fromLocal?.isValid ? fromLocal.toFormat("yyyy-LL-dd") : undefined;
-  const toStr = toLocal?.isValid ? toLocal.toFormat("yyyy-LL-dd") : undefined;
-  const dateBoundsString: any = {
-    ...(fromStr ? { $gte: fromStr } : {}),
-    ...(toStr ? { $lte: toStr } : {}),
-  };
+    // Bounds for string storage (YYYY-MM-DD). If user supplied direct YYYY-MM-DD, use directly.
+    const fromStr = directFrom ?? (fromLocal && fromLocal.isValid ? fromLocal.toFormat("yyyy-LL-dd") : undefined);
+    const toStr   = directTo   ?? (toLocal   && toLocal.isValid   ? toLocal.toFormat("yyyy-LL-dd") : undefined);
+    const dateBoundsString: any = {
+      ...(fromStr ? { $gte: fromStr } : {}),
+      ...(toStr ? { $lte: toStr } : {}),
+    };
 
-  // Matche entweder Date- oder String-Speicherung
-  if (Object.keys(dateBoundsDate).length && Object.keys(dateBoundsString).length) {
-    filter.$or = [
-      { datum: dateBoundsDate },
-      { datum: dateBoundsString },
-    ];
-  } else if (Object.keys(dateBoundsDate).length) {
-    filter.datum = dateBoundsDate;
-  } else if (Object.keys(dateBoundsString).length) {
-    filter.datum = dateBoundsString;
+    // Prefer filtering on datumIso if available, but keep backward-compatible $or
+    const or: any[] = [];
+    if (Object.keys(dateBoundsString).length) {
+      or.push({ datumIso: dateBoundsString });
+    }
+    if (Object.keys(dateBoundsDate).length) {
+      or.push({ datum: dateBoundsDate });
+    }
+
+    if (or.length === 1) {
+      Object.assign(filter, or[0]);
+    } else if (or.length > 1) {
+      (filter as any).$or = or;
+    }
   }
-}
 
   if (params?.region) filter.region = normalizeRegion(params.region);
   if (params?.fahrzeugId) filter.fahrzeugId = new Types.ObjectId(params.fahrzeugId);
@@ -238,7 +257,11 @@ export async function updateTour(
 ): Promise<TourResource> {
   const update: any = {};
 
-  if (patch.datum !== undefined) update.datum = normalizeTourDate(patch.datum as any);
+  if (patch.datum !== undefined) {
+    update.datum = normalizeTourDate(patch.datum as any);
+    const iso = getBerlinISODateInput(patch.datum as any);
+    update.datumIso = iso ?? null;
+  }
   if (patch.region !== undefined) update.region = normalizeRegion(patch.region);
   if (patch.name !== undefined) update.name = patch.name?.trim() ?? null;
 
@@ -360,4 +383,15 @@ export async function deleteAllTours(): Promise<void> {
   } finally {
     await session.endSession();
   }
+}
+
+export async function backfillTourDatumIso(): Promise<{ updated: number }> {
+  const cursor = Tour.find({ $or: [ { datumIso: { $exists: false } }, { datumIso: null }, { datumIso: "" } ] }, { _id: 1, datum: 1 }).cursor();
+  let updated = 0;
+  for await (const doc of cursor as any) {
+    const iso = toISODateBerlinFromDoc(doc.datum);
+    await Tour.updateOne({ _id: doc._id }, { $set: { datumIso: iso ?? null } });
+    updated++;
+  }
+  return { updated };
 }

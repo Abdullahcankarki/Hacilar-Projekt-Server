@@ -1,10 +1,12 @@
 import { Schema, model, Types, Document, Model, ClientSession } from "mongoose";
+import { DateTime } from "luxon";
 
 export type TourStatus = "geplant" | "laufend" | "abgeschlossen" | "archiviert";
 
 export interface TourDoc extends Document {
   _id: Types.ObjectId;
-  datum: string;
+  datum: Date;
+  datumIso?: string;
   region: string;
   name?: string;
   fahrzeugId?: Types.ObjectId | null;
@@ -24,7 +26,8 @@ export interface TourDoc extends Document {
 
 const TourSchema = new Schema<TourDoc, TourModel>(
   {
-    datum: { type: String, required: true, index: true },
+    datum: { type: Date, required: true, index: true },
+    datumIso: { type: String, index: true },
     region: { type: String, required: true, index: true },
     name: { type: String },
     fahrzeugId: { type: Schema.Types.ObjectId, ref: "Fahrzeug", default: null, index: true },
@@ -93,6 +96,7 @@ TourSchema.static(
       {
         $setOnInsert: {
           datum: date,
+          datumIso: DateTime.fromJSDate(date, { zone: "Europe/Berlin" }).toISODate()!,
           region: normalizedRegion,
           belegtesGewichtKg: 0,
           status: "geplant",

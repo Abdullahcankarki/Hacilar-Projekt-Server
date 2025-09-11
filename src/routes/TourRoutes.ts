@@ -12,6 +12,7 @@ import {
   deleteAllTours,
   archiveTour,
   unarchiveTour,
+  backfillTourDatumIso,
 } from "../services/TourService";
 import { authenticate, AuthRequest, isAdmin, validate } from "./helper-hooks";
 
@@ -23,6 +24,14 @@ const tourStatus = ["geplant", "laufend", "abgeschlossen", "archiviert"];
 function toISODateBerlinSafe(input: any): string | null {
   if (!input) return null;
   const Z = "Europe/Berlin" as const;
+
+  // 1) Direkter Date-Input (nach Schema-Umstellung ist tour.datum ein echtes Date)
+  if (input instanceof Date && !Number.isNaN(input.valueOf())) {
+    const dt = DateTime.fromJSDate(input, { zone: Z });
+    return dt.isValid ? dt.toISODate() : null;
+  }
+
+  // 2) ISO-String o.ä.
   let dt = DateTime.fromISO(String(input), { zone: Z });
   if (!dt.isValid) dt = DateTime.fromFormat(String(input), "dd.LL.yyyy", { zone: Z });
   if (!dt.isValid) dt = DateTime.fromFormat(String(input), "yyyyLLdd", { zone: Z });
@@ -84,6 +93,21 @@ async function canEditTour(req: AuthRequest, res: Response, next: Function) {
     return res.status(500).json({ error: err.message });
   }
 }
+
+
+tourRouter.patch(
+  "/lalalolo",
+  authenticate,
+  isAdmin,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const result = await backfillTourDatumIso();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 /* ------------------------------- CREATE ------------------------------- */
 tourRouter.post(
