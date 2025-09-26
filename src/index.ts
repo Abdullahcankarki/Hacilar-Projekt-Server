@@ -7,6 +7,7 @@ import http from "http";
 import mongoose from "mongoose";
 import app from "./app";
 import { logger } from "./logger";
+import { initTelegramBot } from "./telegram/bot";
 
 async function setup() {
   let mongodURI = process.env.DB_CONNECTION_STRING;
@@ -31,6 +32,7 @@ async function setup() {
   httpServer.listen(port, "0.0.0.0", () => {
     logger.info(`Listening for HTTP at http://0.0.0.0:${port}`);
   });
+  initTelegramBot();
 }
 
 setup();

@@ -75,7 +75,7 @@ export interface TourModel extends Model<TourDoc> {
 // Tagesbeginn normalisieren (UTC – bei Bedarf auf Europe/Berlin umstellen)
 function normalizeTourDate(d: Date): Date {
   const n = new Date(d);
-  n.setUTCHours(0, 0, 0, 0);
+  n.setUTCHours(15, 0, 0, 0);
   return n;
 }
 

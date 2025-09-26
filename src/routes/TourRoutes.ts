@@ -90,6 +90,7 @@ async function canEditTour(req: AuthRequest, res: Response, next: Function) {
     (req as any).allowedFieldsForRole = ["status"]; // ggf. erweitern, wenn gewünscht
     return next();
   } catch (err: any) {
+    console.error("canEditTour error:", err);
     return res.status(500).json({ error: err.message });
   }
 }

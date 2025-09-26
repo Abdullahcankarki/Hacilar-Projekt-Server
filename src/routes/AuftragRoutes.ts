@@ -13,6 +13,8 @@ import {
   deleteAllAuftraege,
   getAlleAuftraegeInBearbeitung,
   setAuftragInBearbeitung,
+  getTourInfosForAuftraege,
+  createAuftragQuick,
 } from "../services/AuftragService"; // Passe den Pfad ggf. an
 import { LoginResource } from "../Resources"; // Passe den Pfad ggf. an
 
@@ -152,6 +154,95 @@ auftragRouter.post(
 );
 
 /**
+ * POST /auftraege/quick
+ * Erstellt einen Auftrag aus vereinfachter Eingabe (z. B. Telegram/PWA 3‑Zeilen-Format)
+ * Body:
+ *   {
+ *     kundeId?: string;           // alternativ zu kundeName
+ *     kundeName?: string;         // z. B. "Has Food B.V"
+ *     lieferdatum?: string;       // YYYY-MM-DD
+ *     bemerkungen?: string;
+ *     items: { artikelNr?: string; name?: string; menge: number; einheit?: string }[];
+ *   }
+ * Erlaubte Rollen: admin, kommissionierung, verkauf
+ */
+auftragRouter.post(
+  "/quick",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const roles = req.user?.role;
+      const allowed = Array.isArray(roles)
+        ? roles.includes("admin") ||
+          roles.includes("kommissionierung") ||
+          roles.includes("verkauf")
+        : roles === "admin" ||
+          roles === "kommissionierung" ||
+          roles === "verkauf";
+      if (!allowed) return res.status(403).json({ error: "Forbidden" });
+
+      const { kundeId, kundeName, lieferdatum, bemerkungen, items } =
+        req.body || {};
+
+      const friendlyErrors: string[] = [];
+      if (!kundeId && !(typeof kundeName === "string" && kundeName.trim())) {
+        friendlyErrors.push(
+          "❌ Kunde fehlt. Bitte Kundennamen oder kundeId angeben."
+        );
+      }
+      if (!Array.isArray(items) || items.length === 0) {
+        friendlyErrors.push(
+          "❌ Keine Positionen übergeben. Bitte mindestens eine Artikelzeile angeben."
+        );
+      }
+
+      if (Array.isArray(items)) {
+        items.forEach((it: any, i: number) => {
+          const n = i + 1;
+          if (!it || (!it.name && !it.artikelNr)) {
+            friendlyErrors.push(
+              `❌ Position ${n}: Bitte Artikelname oder artikelNr angeben.`
+            );
+          }
+          if (
+            typeof it?.menge !== "number" ||
+            !isFinite(it.menge) ||
+            it.menge <= 0
+          ) {
+            friendlyErrors.push(
+              `❌ Position ${n}: Menge muss eine Zahl > 0 sein.`
+            );
+          }
+          if (it?.einheit && typeof it.einheit !== "string") {
+            friendlyErrors.push(
+              `❌ Position ${n}: Einheit muss ein Text sein (z. B. "kg", "stk").`
+            );
+          }
+        });
+      }
+
+      if (friendlyErrors.length) {
+        return res.status(400).json({ error: friendlyErrors.join("\n") });
+      }
+
+      const order = await createAuftragQuick({
+        kundeId,
+        kundeName,
+        lieferdatum,
+        bemerkungen,
+        items,
+      });
+      return res.status(201).json(order);
+    } catch (error: any) {
+      console.error("POST /auftraege/quick error:", {
+        message: error?.message,
+      });
+      return res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
  * GET /auftraege
  * Ruft alle Aufträge ab.
  * Dieser Endpunkt ist ausschließlich Admins vorbehalten.
@@ -162,7 +253,9 @@ auftragRouter.get(
   [
     query("page").optional().isInt({ min: 1 }).toInt(),
     query("limit").optional().isInt({ min: 1 }).toInt(),
-    query("status").optional().isIn(["offen", "in Bearbeitung", "abgeschlossen", "storniert"]),
+    query("status")
+      .optional()
+      .isIn(["offen", "in Bearbeitung", "abgeschlossen", "storniert"]),
     query("statusIn").optional().isString(), // comma-separated
     query("kunde").optional().isMongoId(),
     query("auftragsnummer").optional().isString(),
@@ -173,18 +266,26 @@ auftragRouter.get(
     query("createdBis").optional().isISO8601(),
     query("updatedVon").optional().isISO8601(),
     query("updatedBis").optional().isISO8601(),
-    query("kommissioniertStatus").optional().isIn(["offen", "gestartet", "fertig"]),
+    query("kommissioniertStatus")
+      .optional()
+      .isIn(["offen", "gestartet", "fertig"]),
     query("kontrolliertStatus").optional().isIn(["offen", "geprüft"]),
     query("bearbeiter").optional().isString(),
     query("kommissioniertVon").optional().isMongoId(),
     query("kontrolliertVon").optional().isMongoId(),
     query("hasTour").optional().isBoolean().toBoolean(),
-    query("sort").optional().isIn([
-      "createdAtDesc", "createdAtAsc",
-      "updatedAtDesc", "updatedAtAsc",
-      "lieferdatumAsc", "lieferdatumDesc",
-      "auftragsnummerAsc", "auftragsnummerDesc",
-    ]),
+    query("sort")
+      .optional()
+      .isIn([
+        "createdAtDesc",
+        "createdAtAsc",
+        "updatedAtDesc",
+        "updatedAtAsc",
+        "lieferdatumAsc",
+        "lieferdatumDesc",
+        "auftragsnummerAsc",
+        "auftragsnummerDesc",
+      ]),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
@@ -222,7 +323,11 @@ auftragRouter.get(
       if (page !== undefined) params.page = Number(page);
       if (limit !== undefined) params.limit = Number(limit);
       if (status) params.status = String(status);
-      if (statusIn) params.statusIn = String(statusIn).split(",").map((s) => s.trim()).filter(Boolean);
+      if (statusIn)
+        params.statusIn = String(statusIn)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
       if (kunde) params.kunde = String(kunde);
       if (auftragsnummer) params.auftragsnummer = String(auftragsnummer);
       if (q) params.q = String(q);
@@ -232,12 +337,19 @@ auftragRouter.get(
       if (createdBis) params.createdBis = String(createdBis);
       if (updatedVon) params.updatedVon = String(updatedVon);
       if (updatedBis) params.updatedBis = String(updatedBis);
-      if (kommissioniertStatus) params.kommissioniertStatus = String(kommissioniertStatus);
-      if (kontrolliertStatus) params.kontrolliertStatus = String(kontrolliertStatus);
+      if (kommissioniertStatus)
+        params.kommissioniertStatus = String(kommissioniertStatus);
+      if (kontrolliertStatus)
+        params.kontrolliertStatus = String(kontrolliertStatus);
       if (bearbeiter) params.bearbeiter = String(bearbeiter);
-      if (kommissioniertVon) params.kommissioniertVon = String(kommissioniertVon);
+      if (kommissioniertVon)
+        params.kommissioniertVon = String(kommissioniertVon);
       if (kontrolliertVon) params.kontrolliertVon = String(kontrolliertVon);
-      if (typeof hasTour === "boolean" || hasTour === "true" || hasTour === "false") {
+      if (
+        typeof hasTour === "boolean" ||
+        hasTour === "true" ||
+        hasTour === "false"
+      ) {
         params.hasTour = hasTour === true || hasTour === "true";
       }
       if (sort) params.sort = String(sort);
@@ -274,6 +386,44 @@ auftragRouter.get(
         req.user?.role.includes("kommissionierung")
       );
       res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * GET /auftraege/in-bearbeitung/tour-infos
+ * Liefert Tour-Infos (Mapping) für genau die Aufträge, die der Benutzer unter /in-bearbeitung sehen darf.
+ * Erlaubte Rollen: admin, kommissionierung, kontrolle
+ */
+auftragRouter.get(
+  "/in-bearbeitung/tour-infos",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (
+        !req.user?.role.includes("admin") &&
+        !req.user?.role.includes("kommissionierung") &&
+        !req.user?.role.includes("kontrolle")
+      ) {
+        return res
+          .status(403)
+          .json({
+            error:
+              "Nur Admins/Kommissionierung/Kontrolle dürfen diese Daten abrufen",
+          });
+      }
+
+      const auftraege = await getAlleAuftraegeInBearbeitung(
+        req.user?.id,
+        req.user?.role.includes("kommissionierung")
+      );
+      const ids = Array.isArray(auftraege)
+        ? auftraege.map((a: any) => a.id || a._id)
+        : [];
+      const map = await getTourInfosForAuftraege(ids);
+      return res.json(map);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -348,6 +498,37 @@ auftragRouter.get(
       }
 
       res.json(letzterAuftrag);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /auftraege/tour-infos
+ * Liefert ein Mapping auftragId -> { reihenfolge, kennzeichen, ... } ohne die AuftragResource zu ändern.
+ * Erlaubte Rollen: admin, kommissionierung, kontrolle
+ * Body: { ids: string[] }
+ */
+auftragRouter.post(
+  "/tour-infos",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user;
+      if (!user)
+        return res.status(401).json({ error: "Nicht authentifiziert" });
+      const erlaubt =
+        user.role.includes("admin") ||
+        user.role.includes("kommissionierung") ||
+        user.role.includes("kontrolle");
+      if (!erlaubt) {
+        return res.status(403).json({ error: "Zugriff verweigert" });
+      }
+
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const map = await getTourInfosForAuftraege(ids);
+      return res.json(map);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

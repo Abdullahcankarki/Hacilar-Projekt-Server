@@ -18,8 +18,10 @@ import Tour from "../model/TourModel";
 
 async function canEditStop(req: AuthRequest, res: Response, next: Function) {
   try {
-    // Admin darf immer
-    if ((req.user as any)?.role === "admin") {
+    // Admin darf immer (Rolle kann string oder array sein)
+    const roles = (req.user as any)?.role;
+    const isAdminRole = Array.isArray(roles) ? roles.includes("admin") : roles === "admin";
+    if (isAdminRole) {
       (req as any).allowedFieldsForRole = [
         "position",
         "gewichtKg",
@@ -45,7 +47,18 @@ async function canEditStop(req: AuthRequest, res: Response, next: Function) {
 
     const userId = String((req.user as any)?._id || (req.user as any)?.id || "");
     const isOwnTour = userId && String(tourDoc.fahrerId) === userId;
-    if (!isOwnTour) return res.status(403).json({ error: "Forbidden" });
+    if (!isOwnTour) {
+      console.warn("canEditStop forbidden:", {
+        userId,
+        roles: (req.user as any)?.role,
+        stopId,
+        tourId: String(stopDoc.tourId),
+        tourFahrerId: String(tourDoc.fahrerId),
+        isOwnTour,
+        requestedKeys: Object.keys(req.body || {}),
+      });
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     // Fahrer: nur diese Felder editieren
     (req as any).allowedFieldsForRole = [
@@ -60,6 +73,7 @@ async function canEditStop(req: AuthRequest, res: Response, next: Function) {
 
     return next();
   } catch (e: any) {
+    console.error("canEditStop error:", e);
     return res.status(500).json({ error: e.message });
   }
 }
@@ -252,6 +266,13 @@ tourStopRouter.patch(
       if (String(error.message || "").includes("TourStop nicht gefunden")) {
         return res.status(404).json({ error: "TourStop nicht gefunden" });
       }
+      console.error("PATCH /tour-stop/:id error:", {
+        id: req.params.id,
+        userId: (req.user as any)?._id || (req.user as any)?.id,
+        roles: (req.user as any)?.role,
+        bodyKeys: Object.keys(req.body || {}),
+        message: error?.message,
+      });
       res.status(500).json({ error: error.message });
     }
   }
