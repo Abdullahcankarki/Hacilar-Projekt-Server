@@ -26,9 +26,21 @@ const AUTH_LOGIN_URL =
 
 const KUNDE_SEARCH_URL =
   process.env.KUNDE_SEARCH_URL || "http://localhost:3355/api/kunde?search="; // GET with ?search=
+const ARTIKEL_SEARCH_URL =
+  process.env.ARTIKEL_SEARCH_URL || "http://localhost:3355/api/artikel?search="; // GET with ?search=
 
 // === BOT ===
 const bot = new Telegraf(BOT_TOKEN);
+
+// direkt nach: const bot = new Telegraf(BOT_TOKEN);
+function buildDateKeyboard() {
+  const today = toIsoYmdBerlin(new Date());
+  const tomorrow = toIsoYmdBerlin(new Date(Date.now() + 24 * 3600 * 1000));
+  const weekdayRow = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"];
+  return Markup.keyboard([["Heute", "Morgen"], [today, tomorrow], weekdayRow])
+    .resize()
+    .persistent(true);
+}
 
 // Simple In-Memory-State (pro Chat)
 // Session shape helper (informal)
@@ -53,6 +65,7 @@ function isAllowed(userId?: number): boolean {
   return ALLOWED_IDS.includes(userId);
 }
 
+
 function toIsoYmdBerlin(date: Date): string {
   // Date → YYYY-MM-DDT15:00:00 (lokal, Berlin-Zeit)
   const y = date.getFullYear();
@@ -60,6 +73,36 @@ function toIsoYmdBerlin(date: Date): string {
   const d = String(date.getDate()).padStart(2, "0");
   // feste Uhrzeit 15:00
   return `${y}-${m}-${d}T15:00:00`;
+}
+
+// --- Weekday Shortcuts (German) ---
+const WEEKDAY_ALIASES: Record<string, number> = {
+  // 0=Sonntag ... 6=Samstag (JS getDay)
+  sonntag: 0, so: 0,
+  montag: 1, mo: 1,
+  dienstag: 2, di: 2,
+  mittwoch: 3, mi: 3,
+  donnerstag: 4, do: 4,
+  freitag: 5, fr: 5,
+  samstag: 6, sa: 6,
+  sonnabend: 6, sb: 6,
+};
+
+function parseWeekday(text: string): number | null {
+  const key = text.trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(WEEKDAY_ALIASES, key)
+    ? WEEKDAY_ALIASES[key]
+    : null;
+}
+
+function nextOccurrenceOfWeekday(targetDow: number, from: Date): Date {
+  const base = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const todayDow = base.getDay(); // 0..6 (So..Sa)
+  let delta = (targetDow - todayDow + 7) % 7;
+  if (delta === 0) delta = 7; // gleicher Tag -> nächste Woche
+  const result = new Date(base);
+  result.setDate(base.getDate() + delta);
+  return result;
 }
 
 function parseOrderText(text: string): {
@@ -240,6 +283,35 @@ async function searchCustomers(chatId: number, q: string) {
   }
 }
 
+async function searchArticles(chatId: number, q: string) {
+  const authHeader = getAuthHeaderForChat(chatId);
+  const headers: Record<string, string> = {};
+  if (authHeader) headers["Authorization"] = authHeader;
+  const res = await fetch(`${ARTIKEL_SEARCH_URL}${encodeURIComponent(q)}`, {
+    headers,
+  } as any);
+  const body = await res.text();
+  if (!res.ok) {
+    let msg = `Artikelsuche fehlgeschlagen (${res.status})`;
+    try {
+      const data = body ? JSON.parse(body) : null;
+      if (data?.error) msg = String(data.error);
+      else if (body) msg = body;
+    } catch {
+      if (body) msg = body;
+    }
+    throw new Error(msg);
+  }
+  try {
+    const data = body ? JSON.parse(body) : null;
+    if (data && Array.isArray(data.items)) return data.items;
+    if (Array.isArray(data)) return data;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 async function postQuickOrder(chatId: number, payload: any) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -250,6 +322,36 @@ async function postQuickOrder(chatId: number, payload: any) {
   }
   headers["Authorization"] = authHeader;
   const res = await fetch(QUICK_ORDER_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  } as any);
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = `Fehler (${res.status})`;
+    try {
+      const data = body ? JSON.parse(body) : null;
+      if (data?.error) msg = String(data.error);
+      else if (body) msg = body;
+    } catch {
+      if (body) msg = body;
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+async function postSetGesamtpreis(chatId: number, payload: { artikel: string; customer: string; gesamtpreis: number }) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const authHeader = getAuthHeaderForChat(chatId);
+  if (!authHeader) {
+    throw new Error("AUTH_MISSING");
+  }
+  headers["Authorization"] = authHeader;
+  const url = (process.env.KUNDENPREIS_SET_URL || "http://localhost:3355/api/kundenPreis/set-gesamtpreis");
+  const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
@@ -289,7 +391,7 @@ bot.start((ctx) =>
       "Schritt 2: Wähle den richtigen Kunden.\n" +
       "Schritt 3: Datum wählen (Heute/Morgen oder YYYY-MM-DD).\n" +
       "Schritt 4: Positionen senden (z. B. '01001 200kg' oder 'Hä. Flügel Landgeflügel 200kg').\n\n" +
-      "Befehle: /order (Beispiele), /login, /logout, /reset"
+      "Befehle: /order (Beispiele), /login, /logout, /reset, /preis"
   )
 );
 
@@ -300,18 +402,38 @@ bot.help((ctx) =>
       "1) Kundennamen senden → ich zeige passende Kunden.\n" +
       "2) Kunden auswählen → Datum setzen.\n" +
       "3) Positionen schicken → bestätigen.\n\n" +
-      "Befehle:\n/order – Beispiele anzeigen\n/login – Anmelden\n/logout – Abmelden\n/reset – Session leeren"
+      "Befehle:\n/order – Beispiele anzeigen\n/login – Anmelden\n/logout – Abmelden\n/reset – Session leeren\n/preis – Kunden-Artikel-Gesamtpreis setzen (berechnet Aufpreis)\n"
   )
 );
+bot.command("preis", async (ctx) => {
+  const chatId = ctx.chat?.id as number;
+  if (!hasAuth(chatId)) {
+    return ctx.reply("🔒 Bitte zuerst anmelden: /login");
+  }
+  const s = state.get(chatId) || {};
+  // Preis-Modus starten: Kunde bewusst zurücksetzen, damit jetzt erst abgefragt wird
+  state.set(chatId, { ...s, mode: "preis", kundeId: undefined, kunde: undefined, items: undefined, preisFlow: {} });
+  return ctx.reply(
+    "💶 Preis-Modus aktiviert.\n" +
+    "1) Kunde wählen (Name senden und auswählen).\n" +
+    "2) Artikelsuche senden (Nummer oder Name).\n" +
+    "3) Danach den gewünschten *Gesamtpreis* senden, z. B. 12.99.\n\n" +
+    "Ich berechne: Aufpreis = Gesamtpreis − Artikel.Basispreis und speichere ihn für diesen Kunden/Artikel."
+  );
+});
 
 bot.command("order", async (ctx) => {
+  const chatId = ctx.chat?.id as number;
+  const s = state.get(chatId) || {};
+  // Aktiviert expliziten Order-Modus und leert evtl. alte Order-Daten
+  state.set(chatId, { ...s, mode: "order", kundeId: undefined, kunde: undefined, datum: undefined, items: undefined });
   const today = toIsoYmdBerlin(new Date());
   const tomorrow = toIsoYmdBerlin(new Date(Date.now() + 24 * 3600 * 1000));
   await ctx.reply(
     "Ablauf:\n" +
       "1) Sende nur den Kundennamen (z. B. 'Has Food').\n" +
       "2) Wähle den richtigen Kunden.\n" +
-      "3) Datum setzen: Heute / Morgen / YYYY-MM-DD.\n" +
+      "3) Datum setzen: Heute / Morgen / Wochentag / YYYY-MM-DD.\n" +
       "4) Positionen (je Zeile):\n" +
       "   • 01001 200kg\n" +
       "   • Hä. Flügel Landgeflügel 200kg",
@@ -357,12 +479,70 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // If no customer selected yet and text looks like a customer query, search and present choices
   const session = state.get(chatId) || {};
+
+  // === Preis-Flow ===
+  if (session.mode === "preis") {
+    // 1) Kunde noch nicht gesetzt → benutze bestehenden Kundensuch-Flow (nichts zu tun hier)
+    if (!session.kundeId && !session.kunde) {
+      // falls der Text ein Befehl ist, ignoriere (wird anderswo behandelt)
+      if (text.startsWith("/")) return; // andere Commands wie /reset, /logout
+      // Triggere Kundensuche über den allgemeinen Block weiter unten
+    } else {
+      // 2) Wenn noch kein Artikel gewählt, versuche Artikelsuche
+      const pf = session.preisFlow || {};
+      if (!pf.artikelId) {
+        if (text.startsWith("/")) return; // andere Commands zulassen
+        try {
+          const results = await searchArticles(chatId, text);
+          if (!Array.isArray(results) || results.length === 0) {
+            return ctx.reply("😕 Kein Artikel gefunden. Bitte präziser tippen.");
+          }
+          const top = results.slice(0, 8);
+          const rows = top.map((a: any) => [
+            Markup.button.callback(
+              (a.artikelnummer || a.code || a.name || a.title || a.id),
+              `pick_article:${a.id || a._id}`
+            ),
+          ]);
+          const choices = top.map((a: any) => ({ id: String(a.id || a._id), name: String(a.artikelnummer || a.code || a.name || a.title || a.id || a._id) }));
+          state.set(chatId, { ...session, preisFlow: { ...pf, artikelChoices: choices } });
+          return ctx.reply('Bitte Artikel auswählen:', Markup.inlineKeyboard(rows));
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          return ctx.reply(`❌ Artikelsuche fehlgeschlagen: ${msg}`);
+        }
+      }
+      // 3) Artikel gewählt → Preis erwarten
+      const numRe = /^\d+(?:[.,]\d+)?$/;
+      if (numRe.test(text)) {
+        const preis = Number(text.replace(',', '.'));
+        try {
+          const result = await postSetGesamtpreis(chatId, {
+            artikel: pf.artikelId,
+            customer: session.kundeId || session.kunde, // bevorzugt ID; Backend erwartet ID → Kunde sollte via Auswahl gesetzt sein
+            gesamtpreis: preis,
+          });
+          // Aufräumen des Preis-Modus
+          const { mode, preisFlow, ...rest } = session;
+          state.set(chatId, rest);
+          return ctx.reply(`✅ Aufpreis gesetzt. Artikel: ${pf.artikelName || pf.artikelId}\nGesamtpreis: ${preis}\nAufpreis: ${result?.aufpreis ?? 'gespeichert'}\nFür eine Bestellung /order`);
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          return ctx.reply(`❌ Konnte Aufpreis nicht setzen: ${msg}`);
+        }
+      } else if (!text.startsWith('/')) {
+        return ctx.reply("Bitte jetzt nur den gewünschten Gesamtpreis senden, z. B. 12.99");
+      }
+    }
+  }
+
+  // If no customer selected yet and text looks like a customer query, search and present choices
   const itemLineRe =
     /^[-•]?\s*(.+?)\s+(\d+(?:[.,]\d+)?)\s*(kg|stk|kiste|karton)?$/i;
   if (
     !lf &&
+    (session.mode === "order" || session.mode === "preis") &&
     !session.kundeId &&
     !session.kunde &&
     text &&
@@ -431,7 +611,7 @@ bot.on("text", async (ctx) => {
       authByChat.set(chatId, { token, expiresAt, username });
       loginFlowByChat.delete(chatId);
       return ctx.reply(
-        "✅ Erfolgreich angemeldet. Du kannst jetzt einen Auftrag senden oder bestehende prüfen."
+        "✅ Erfolgreich angemeldet.\nBestellung starten: /order\nPreis setzen: /preis"
       );
     } catch (e: any) {
       loginFlowByChat.delete(chatId);
@@ -439,65 +619,89 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // Quick shortcuts
+  // Quick shortcuts (Heute, Morgen, YYYY-MM-DD, Wochentag-Namen)
+  const weekday = parseWeekday(text);
   if (
     text === "Heute" ||
     text === "Morgen" ||
-    /^\d{4}-\d{2}-\d{2}$/.test(text)
+    /^\d{4}-\d{2}-\d{2}$/.test(text) ||
+    weekday !== null
   ) {
     const s = state.get(chatId) || {};
+    if (s.mode !== "order") {
+      return ctx.reply("ℹ️ Für Bestellungen bitte zuerst /order senden.");
+    }
     let date: Date;
-    if (text === "Heute") date = new Date();
-    else if (text === "Morgen") date = new Date(Date.now() + 24 * 3600 * 1000);
-    else date = new Date(text);
+    if (text === "Heute") {
+      date = new Date();
+    } else if (text === "Morgen") {
+      date = new Date(Date.now() + 24 * 3600 * 1000);
+    } else if (weekday !== null) {
+      date = nextOccurrenceOfWeekday(weekday, new Date());
+    } else {
+      date = new Date(text);
+    }
     s.datum = toIsoYmdBerlin(date);
     state.set(chatId, s);
     const haveCustomer = !!(s.kundeId || s.kunde);
-    const needWhat = haveCustomer ? 'Positionen (z. B. "01001 200kg")' : 'Kundennamen und Positionen (z. B. "01001 200kg")';
-    return ctx.reply(`📅 Lieferdatum gesetzt: ${s.datum}. Sende ${needWhat}.`);
+    const needWhat = haveCustomer
+      ? 'Positionen (z. B. "01001 200kg")'
+      : 'Kundennamen und Positionen (z. B. "01001 200kg")';
+    const kb = buildDateKeyboard();
+    return ctx.reply(`📅 Lieferdatum gesetzt: ${s.datum}. Sende ${needWhat}.`, kb);
   }
 
-  const parsed = parseOrderText(text);
+  if (session.mode === "order") {
+    const parsed = parseOrderText(text);
 
-  // Merge mit Session (was neu kommt, überschreibt)
-  const merged = {
-    kundeId: session.kundeId,
-    kunde: parsed.kunde ?? session.kunde,
-    datum: parsed.datum ?? session.datum,
-    items:
-      parsed.items && parsed.items.length > 0 ? parsed.items : session.items,
-  } as any;
+    // Merge mit Session (was neu kommt, überschreibt)
+    const merged = {
+      kundeId: session.kundeId,
+      kunde: parsed.kunde ?? session.kunde,
+      datum: parsed.datum ?? session.datum,
+      items:
+        parsed.items && parsed.items.length > 0 ? parsed.items : session.items,
+    } as any;
 
-  // Welche Infos fehlen noch?
-  const missing: string[] = [];
-  if (!merged.kundeId && !merged.kunde)
-    missing.push("Kundennamen wählen/senden");
-  if (!merged.datum) missing.push("Datum (Heute/Morgen oder YYYY-MM-DD)");
-  if (
-    !merged.items ||
-    !Array.isArray(merged.items) ||
-    merged.items.length === 0
-  )
-    missing.push('Positionen (z. B. "01001 200kg")');
+    // Welche Infos fehlen noch?
+    const missing: string[] = [];
+    if (!merged.kundeId && !merged.kunde)
+      missing.push("Kundennamen wählen/senden");
+    if (!merged.datum) missing.push("Datum (Heute/Morgen oder YYYY-MM-DD)");
+    if (
+      !merged.items ||
+      !Array.isArray(merged.items) ||
+      merged.items.length === 0
+    )
+      missing.push('Positionen (z. B. "01001 200kg")');
 
-  // Session speichern
-  state.set(chatId, { ...session, ...merged });
+    // Session speichern
+    state.set(chatId, { ...session, ...merged });
 
-  // Nur das Fehlende anfordern
-  if (missing.length > 0) {
-    return ctx.reply(`ℹ️ Bitte noch: ${missing.join(" · ")}`);
+    // Nur das Fehlende anfordern
+    if (missing.length > 0) {
+      return ctx.reply(`ℹ️ Bitte noch: ${missing.join(" · ")}`);
+    }
+
+    // Alles da → Zusammenfassung + Bestätigen
+    await ctx.reply(
+      renderSummary(merged.kunde, merged.datum, merged.items),
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✔ Bestätigen", "confirm_order"),
+          Markup.button.callback("✏️ Ändern", "edit_order"),
+        ],
+      ])
+    );
   }
-
-  // Alles da → Zusammenfassung + Bestätigen
-  await ctx.reply(
-    renderSummary(merged.kunde, merged.datum, merged.items),
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("✔ Bestätigen", "confirm_order"),
-        Markup.button.callback("✏️ Ändern", "edit_order"),
-      ],
-    ])
-  );
+  else {
+    // Wenn der Text wie eine Positionszeile aussieht, freundlich auf /order hinweisen
+    const looksLikeItem = /^[-•]?\s*(.+?)\s+(\d+(?:[.,]\d+)?)(?:\s*(kg|stk|kiste|karton))?$/i.test(text)
+      || /^\d{4}-\d{2}-\d{2}$/.test(text);
+    if (looksLikeItem && !text.startsWith('/')) {
+      return ctx.reply("ℹ️ Für Bestellungen bitte zuerst /order senden.");
+    }
+  }
 });
 
 // --- Actions ---
@@ -568,9 +772,22 @@ bot.action(/^pick_customer:(.+)$/, async (ctx) => {
       if (hit) kundeName = hit.name;
     }
     state.set(chatId, { ...current, kundeId: id, kunde: kundeName, kundenChoices: undefined });
-    await ctx.reply(
-      `✅ Kunde gesetzt${kundeName ? `: ${kundeName}` : ''}. Bitte Datum senden (Heute/Morgen oder YYYY-MM-DD).`
-    );
+    const mode = (state.get(chatId) || {}).mode;
+    if (mode === "order") {
+      const kb = buildDateKeyboard();
+      await ctx.reply(
+        `✅ Kunde gesetzt${kundeName ? `: ${kundeName}` : ''}. Bitte Datum senden (Heute/Morgen, Wochentag oder YYYY-MM-DD).`,
+        kb
+      );
+    } else if (mode === "preis") {
+      await ctx.reply(
+        `✅ Kunde gesetzt${kundeName ? `: ${kundeName}` : ''}. Jetzt Artikel suchen (Nummer oder Name) und auswählen.`
+      );
+    } else {
+      await ctx.reply(
+        `✅ Kunde gesetzt${kundeName ? `: ${kundeName}` : ''}.`
+      );
+    }
   } catch (e: any) {
     await ctx.reply(
       `❌ Konnte Kundenwahl nicht übernehmen: ${e?.message || e}`
@@ -582,3 +799,44 @@ export function initTelegramBot() {
   bot.launch(); // Long-Polling (für Produktion ggf. auf Webhook umstellen)
   console.log("🤖 Telegram-Bot gestartet");
 }
+
+bot.action(/^pick_article:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat?.id as number;
+    const session = state.get(chatId) || {};
+    const id = ctx.match[1];
+    let artikelName: string | undefined;
+    if (session?.preisFlow?.artikelChoices && Array.isArray(session.preisFlow.artikelChoices)) {
+      const hit = session.preisFlow.artikelChoices.find((c: any) => String(c.id) === String(id));
+      if (hit) artikelName = hit.name;
+    }
+    const pf = { ...(session.preisFlow || {}), artikelId: id, artikelName, artikelChoices: undefined };
+    state.set(chatId, { ...session, preisFlow: pf });
+    await ctx.reply(`✅ Artikel gesetzt${artikelName ? `: ${artikelName}` : ''}. Bitte gewünschten *Gesamtpreis* senden, z. B. 12.99`);
+  } catch (e: any) {
+    await ctx.reply(`❌ Konnte Artikelauswahl nicht übernehmen: ${e?.message || e}`);
+  }
+});
+
+bot.command("status", async (ctx) => {
+  const chatId = ctx.chat?.id as number;
+  const s = state.get(chatId) || {};
+  const summary = renderSummary(s.kunde, s.datum, s.items || []);
+  const missing: string[] = [];
+  if (!s.kundeId && !s.kunde) missing.push("Kundennamen wählen/senden");
+  if (!s.datum) missing.push("Datum");
+  if (!s.items || !Array.isArray(s.items) || s.items.length === 0) missing.push("Positionen");
+  await ctx.reply((missing.length ? `🔎 Es fehlt noch: ${missing.join(" · ")}\n\n` : "") + summary);
+});
+
+bot.command("cancel", async (ctx) => {
+  const chatId = ctx.chat?.id as number;
+  const s = state.get(chatId) || {};
+  if (s.mode || s.preisFlow) {
+    const { mode, preisFlow, ...rest } = s;
+    state.set(chatId, rest);
+    return ctx.reply("✅ Aktueller Modus beendet. Du kannst normal weitermachen.");
+  }
+  return ctx.reply("Es läuft gerade kein spezieller Modus.");
+});

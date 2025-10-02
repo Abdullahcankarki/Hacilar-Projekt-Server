@@ -21,6 +21,11 @@ export interface IKunde{
     isApproved: boolean;
     gewerbeDateiUrl: string;
     zusatzDateiUrl?: string;
+    // E-Mail-Empfänger für Belegversand (Phase 4)
+    emailRechnung?: string;
+    emailLieferschein?: string;
+    emailBuchhaltung?: string;
+    emailSpedition?: string;
 }
 
 const kundeSchema = new Schema<IKunde>({
@@ -42,6 +47,11 @@ const kundeSchema = new Schema<IKunde>({
     isApproved: { type: Boolean, default: false },
     gewerbeDateiUrl: { type: String },
     zusatzDateiUrl: { type: String },
+    // E-Mail-Empfänger für Belegversand (Phase 4)
+    emailRechnung: { type: String },
+    emailLieferschein: { type: String },
+    emailBuchhaltung: { type: String },
+    emailSpedition: { type: String },
   },
   { timestamps: true }
 )

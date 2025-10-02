@@ -525,6 +525,13 @@ export async function updateArtikelPositionNormale(
   if (!position) {
     throw new Error("Artikelposition nicht gefunden");
   }
+  // Stelle sicher, dass artikelName gesetzt ist
+  if (!position.artikelName) {
+    const curArtikelDoc = await ArtikelModel.findById(position.artikel);
+    if (curArtikelDoc) {
+      position.artikelName = curArtikelDoc.name;
+    }
+  }
   // Falls Artikel geändert wird, neuen Artikel laden
   if (data.artikel && data.artikel !== position.artikel.toString()) {
     const neuerArtikel = await ArtikelModel.findById(data.artikel);
@@ -556,6 +563,8 @@ export async function updateArtikelPositionNormale(
       }).populate<{ kunde: { name: string } }>("kunde");
       if (auftrag) {
         const kundenName = auftrag.kunde?.name || "Unbekannt";
+        const artikelDocForZ = await ArtikelModel.findById(position.artikel);
+        const artikelNameResolved = position.artikelName || artikelDocForZ?.name || "Unbekannt";
         let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
           auftragId: auftrag._id,
           archiviert: false,
@@ -563,7 +572,7 @@ export async function updateArtikelPositionNormale(
         if (zerlegeauftrag) {
           zerlegeauftrag.artikelPositionen.push({
             artikelPositionId: position._id.toString(),
-            artikelName: position.artikelName,
+            artikelName: artikelNameResolved,
             menge: position.gesamtgewicht,
             bemerkung: position.zerlegeBemerkung,
             status: "offen",
@@ -577,7 +586,7 @@ export async function updateArtikelPositionNormale(
             artikelPositionen: [
               {
                 artikelPositionId: position._id.toString(),
-                artikelName: position.artikelName,
+                artikelName: artikelNameResolved,
                 menge: position.gesamtgewicht,
                 bemerkung: position.zerlegeBemerkung,
                 status: "offen",
@@ -590,6 +599,8 @@ export async function updateArtikelPositionNormale(
       }
     }
     if (vorherZerlegung && data.zerlegung) {
+      const artikelDocForZ = await ArtikelModel.findById(position.artikel);
+      const artikelNameResolved = position.artikelName || artikelDocForZ?.name || "Unbekannt";
       const zerlegeauftrag = await ZerlegeAuftragModel.findOne({
         "artikelPositionen.artikelPositionId": position._id,
       });
@@ -601,7 +612,7 @@ export async function updateArtikelPositionNormale(
           );
         zerlegeauftrag.artikelPositionen.push({
           artikelPositionId: position._id.toString(),
-          artikelName: position.artikelName,
+          artikelName: artikelNameResolved,
           menge: position.gesamtgewicht,
           bemerkung: position.zerlegeBemerkung,
           status: "offen",
@@ -675,6 +686,8 @@ export async function updateArtikelPositionNormale(
       "artikelPositionen.artikelPositionId": updated._id,
     });
     if (zerlegeauftrag) {
+      const artikelDocForZ2 = await ArtikelModel.findById(updated.artikel);
+      const artikelNameResolved2 = updated.artikelName || artikelDocForZ2?.name || "Unbekannt";
       // Duplikate verhindern
       zerlegeauftrag.artikelPositionen =
         zerlegeauftrag.artikelPositionen.filter(
@@ -682,7 +695,7 @@ export async function updateArtikelPositionNormale(
         );
       zerlegeauftrag.artikelPositionen.push({
         artikelPositionId: updated._id.toString(),
-        artikelName: updated.artikelName,
+        artikelName: artikelNameResolved2,
         menge: updated.gesamtgewicht,
         bemerkung: updated.zerlegeBemerkung,
         status: "offen",

@@ -33,6 +33,10 @@ function mapKundeToResource(k: any): KundeResource {
     gewerbeDateiUrl: k.gewerbeDateiUrl,
     zusatzDateiUrl: k.zusatzDateiUrl,
     isApproved: k.isApproved,
+    emailRechnung: k.emailRechnung,
+    emailLieferschein: k.emailLieferschein,
+    emailBuchhaltung: k.emailBuchhaltung,
+    emailSpedition: k.emailSpedition,
     updatedAt: k.updatedAt?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -55,6 +59,10 @@ export async function createKunde(data: {
   kategorie?: string;
   gewerbeDateiUrl?: string;
   zusatzDateiUrl?: string;
+  emailRechnung?: string;
+  emailLieferschein?: string;
+  emailBuchhaltung?: string;
+  emailSpedition?: string;
 }): Promise<KundeResource> {
   const email = normalizeEmail(data.email);
   if (!email) throw new Error("E-Mail ist erforderlich");
@@ -83,6 +91,10 @@ export async function createKunde(data: {
     isApproved: false,
     gewerbeDateiUrl: data.gewerbeDateiUrl?.trim(),
     zusatzDateiUrl: data.zusatzDateiUrl?.trim(),
+    emailRechnung: data.emailRechnung?.trim(),
+    emailLieferschein: data.emailLieferschein?.trim(),
+    emailBuchhaltung: data.emailBuchhaltung?.trim(),
+    emailSpedition: data.emailSpedition?.trim(),
   });
   const saved = await newKunde.save();
   return mapKundeToResource(saved);
@@ -207,6 +219,10 @@ export async function updateKunde(
     gewerbeDateiUrl: string;
     zusatzDateiUrl: string;
     isApproved: boolean;
+    emailRechnung?: string;
+    emailLieferschein?: string;
+    emailBuchhaltung?: string;
+    emailSpedition?: string;
   }>,
   currentUser: LoginResource
 ): Promise<KundeResource> {
@@ -250,6 +266,10 @@ export async function updateKunde(
   if (data.kategorie !== undefined) updateData.kategorie = data.kategorie?.trim();
   if (data.gewerbeDateiUrl !== undefined) updateData.gewerbeDateiUrl = data.gewerbeDateiUrl?.trim();
   if (data.zusatzDateiUrl !== undefined) updateData.zusatzDateiUrl = data.zusatzDateiUrl?.trim();
+  if (data.emailRechnung !== undefined) updateData.emailRechnung = data.emailRechnung?.trim();
+  if (data.emailLieferschein !== undefined) updateData.emailLieferschein = data.emailLieferschein?.trim();
+  if (data.emailBuchhaltung !== undefined) updateData.emailBuchhaltung = data.emailBuchhaltung?.trim();
+  if (data.emailSpedition !== undefined) updateData.emailSpedition = data.emailSpedition?.trim();
 
   // Passwort ändern (optional)
   if (data.password) {

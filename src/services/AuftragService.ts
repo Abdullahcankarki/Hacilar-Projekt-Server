@@ -9,6 +9,7 @@ import { Kunde } from "../model/KundeModel";
 import { ArtikelModel } from "../model/ArtikelModel";
 import { ArtikelPositionResource, AuftragResource } from "../Resources"; // Pfad ggf. anpassen
 import { getArtikelById } from "../services/ArtikelService";
+import { createArtikelPosition } from "../services/ArtikelPositionService";
 import { Mitarbeiter } from "../model/MitarbeiterModel";
 import { Counter } from "../model/CounterModel";
 import {
@@ -916,7 +917,15 @@ export async function createAuftragQuick(data: {
   }
 
   // Erlaubte Einheiten (kannst du bei Bedarf erweitern)
-  const ALLOWED_UNITS = new Set(["kg", "stk", "kiste", "karton"]);
+  const ALLOWED_UNITS = new Set(["kg", "stück", "kiste", "karton"]);
+  const normalizeEinheit = (val?: string) => {
+    const v = (val || "kg").toString().trim().toLowerCase();
+    if (v === "stk" || v === "stueck" || v === "stuck" || v === "piece") return "stück";
+    if (v === "kg" || v === "kilo" || v === "kilogramm") return "kg";
+    if (v === "kiste" || v === "kisten") return "kiste";
+    if (v === "karton" || v === "kartons") return "karton";
+    return v; // unbekannt weiterreichen (wird unten geloggt)
+  };
 
   const errors: string[] = [];
 
@@ -949,13 +958,11 @@ export async function createAuftragQuick(data: {
       errors.push(`❌ Position ${idx}: Menge muss eine Zahl > 0 sein.`);
     }
 
-    // Einheit normalisieren
-    let einheit = (it.einheit || "kg").toString().trim().toLowerCase();
-    if (einheit && !ALLOWED_UNITS.has(einheit)) {
-      // nicht bremsen – aber Hinweis geben
+    // Einheit normalisieren (auf erwartete Werte der createArtikelPosition)
+    let einheit = normalizeEinheit(it.einheit);
+    if (!ALLOWED_UNITS.has(einheit)) {
       errors.push(`ℹ️ Position ${idx}: Unbekannte Einheit "${einheit}" – es wird trotzdem gespeichert.`);
     }
-    if (!einheit) einheit = "kg";
 
     // Artikel auflösen (artikelNr bevorzugt, sonst name)
     let artikelDoc: any = null;
@@ -999,34 +1006,33 @@ export async function createAuftragQuick(data: {
     throw new Error(errors.join("\n"));
   }
 
-  // --- ArtikelPositionen anlegen ---
-  const artikelPositionIds: string[] = [];
-  for (let i = 0; i < resolved.length; i++) {
-    const r = resolved[i];
-    try {
-      const ap = await new ArtikelPosition({
-        artikel: r.artikelId,
-        menge: r.menge,
-        einheit: r.einheit,
-      }).save();
-      artikelPositionIds.push(ap._id.toString());
-    } catch (e: any) {
-      throw new Error(`❌ Konnte Position ${i + 1} (Artikel: ${r.artikelName}) nicht speichern: ${e?.message || e}`);
-    }
-  }
-
-  // --- Auftrag zunächst ohne Lieferdatum erstellen ---
+  // --- Auftrag zunächst leer erstellen (ohne Positionen) ---
   if (!kundeId) {
     throw new Error("❌ Auftrag konnte nicht erstellt werden: Kunde unbekannt.");
   }
 
   const created = await createAuftrag({
     kunde: kundeId,
-    artikelPosition: artikelPositionIds,
+    artikelPosition: [],
     status: data.status ?? "offen",
     lieferdatum: undefined,
     bemerkungen: data.bemerkungen,
   });
+
+  // --- ArtikelPositionen via Service anlegen & dem Auftrag zuordnen ---
+  for (let i = 0; i < resolved.length; i++) {
+    const r = resolved[i];
+    try {
+      await createArtikelPosition({
+        artikel: r.artikelId,
+        menge: r.menge,
+        einheit: normalizeEinheit(r.einheit) as any, // Service erwartet "kg" | "stück" | "kiste" | "karton"
+        auftragId: created.id,
+      });
+    } catch (e: any) {
+      throw new Error(`❌ Konnte Position ${i + 1} (Artikel: ${r.artikelName}) nicht speichern: ${e?.message || e}`);
+    }
+  }
 
   // --- Lieferdatum optional via Update setzen (triggert Hooks) ---
   if (data.lieferdatum) {
@@ -1039,5 +1045,6 @@ export async function createAuftragQuick(data: {
     }
   }
 
-  return created;
+  // Ohne Lieferdatum: aktuellen Stand inkl. Summen zurückgeben
+  return await getAuftragById(created.id!);
 }

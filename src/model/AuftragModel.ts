@@ -24,6 +24,19 @@ export interface IAuftrag extends Document {
   updatedAt: Date; // Aktualisierungsdatum
   tourId?: Types.ObjectId | null;
   tourStopId?: Types.ObjectId | null;
+
+  // ==== Belegwesen (Phase 4) ====
+  lieferscheinNummer?: string;
+  rechnungsNummer?: string;
+  gutschriftNummern?: string[];        // mehrere Gutschriften möglich
+  preisdifferenzNummern?: string[];    // mehrere Preisdifferenzen möglich
+
+  zahlstatus?: "offen" | "teilweise" | "bezahlt";
+  offenBetrag?: number;
+  zahlungsDatum?: Date;
+
+  belegListe?: Schema.Types.Mixed[];          // Array für Beleg-Metadaten
+  emailLogs?: Schema.Types.Mixed[];           // Versand-Historie
 }
 
 const auftragSchema = new Schema<IAuftrag>(
@@ -59,6 +72,19 @@ const auftragSchema = new Schema<IAuftrag>(
     kontrolliertZeit: { type: Date },
     tourId: { type: Schema.Types.ObjectId, ref: "Tour" },
     tourStopId: { type: Schema.Types.ObjectId, ref: "TourStop" },
+
+    // ==== Belegwesen (Phase 4) ====
+    lieferscheinNummer: { type: String },
+    rechnungsNummer: { type: String },
+    gutschriftNummern: [{ type: String }],
+    preisdifferenzNummern: [{ type: String }],
+
+    zahlstatus: { type: String, enum: ["offen", "teilweise", "bezahlt"] },
+    offenBetrag: { type: Number },
+    zahlungsDatum: { type: Date },
+
+    belegListe: { type: [Schema.Types.Mixed], default: [] },
+    emailLogs: { type: [Schema.Types.Mixed], default: [] },
   },
   { timestamps: true }
 );

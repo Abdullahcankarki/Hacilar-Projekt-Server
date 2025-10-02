@@ -45,6 +45,11 @@ export type KundeResource = {
   isApproved: boolean;
   gewerbeDateiUrl?: string;
   zusatzDateiUrl?: string;
+  // E-Mail-Empfänger für automatische Belegversand-Workflows
+  emailRechnung?: string;
+  emailLieferschein?: string;
+  emailBuchhaltung?: string;
+  emailSpedition?: string;
 };
 
 export type AuftragResource = {
@@ -75,6 +80,19 @@ export type AuftragResource = {
   updatedAt?: string;
   tourId?: string;
   tourStopId?: string;
+
+  // ==== Belegwesen (Phase 4) ====
+  lieferscheinNummer?: string;
+  rechnungsNummer?: string;
+  gutschriftNummern?: string[];        // mehrere Gutschriften möglich
+  preisdifferenzNummern?: string[];    // mehrere Preisdifferenzen möglich
+
+  zahlstatus?: Zahlstatus;             // offen | teilweise | bezahlt
+  offenBetrag?: number;                // offener Betrag in EUR
+  zahlungsDatum?: string;              // ISO-Datum, wenn bezahlt
+
+  belegListe?: BelegResource[];        // nicht persistente Metadaten zu erzeugten Belegen
+  emailLogs?: EmailLogResource[];      // Versand-Historie
 };
 
 export type ArtikelPositionResource = {
@@ -133,6 +151,41 @@ export type KundenPreisResource = {
   artikel: string; // ID des Artikels als String
   customer: string; // ID des Kunden als String
   aufpreis: number; // Aufpreis für diesen Kunden
+};
+
+// ===== Belegwesen: Enums & Ressourcen =====
+export type Zahlstatus = "offen" | "teilweise" | "bezahlt";
+
+export type BelegTyp =
+  | "lieferschein"
+  | "rechnung"
+  | "gutschrift"
+  | "preisdifferenz";
+
+export type BelegResource = {
+  id?: string;
+  typ: BelegTyp;                 // Art des Belegs
+  nummer?: string;               // fortlaufende Nummer (falls vergeben)
+  datum?: string;                // ISO-String
+  betrag?: number;               // Gesamtbetrag (falls vorhanden)
+  status?: "entwurf" | "final"; // Dokumentstatus
+  pdfGeneriert?: boolean;        // wurde ein PDF erzeugt
+  referenzBelegNummer?: string;  // z. B. Bezug auf Rechnung bei Gutschrift/Preisdifferenz
+};
+
+export type EmailLogResource = {
+  id?: string;
+  auftragId: string;
+  belegTyp: BelegTyp;
+  belegNummer?: string;
+  empfaenger: string[];          // To
+  cc?: string[];
+  bcc?: string[];
+  betreff?: string;
+  status: "geplant" | "gesendet" | "fehlgeschlagen";
+  fehler?: string;
+  gesendetAm?: string;           // ISO-String
+  messageId?: string;            // Provider-Nachweis
 };
 
 export type ZerlegeArtikelPosition = {

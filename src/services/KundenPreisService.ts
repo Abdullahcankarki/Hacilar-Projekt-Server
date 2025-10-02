@@ -1,6 +1,7 @@
 import { Kunde } from '../model/KundeModel';
 import { KundenPreisModel } from '../model/KundenPreisModel'; // Pfad ggf. anpassen
 import { KundenPreisResource } from '../Resources';        // Pfad ggf. anpassen
+import { ArtikelModel } from '../model/ArtikelModel';
 
 /**
  * Erstellt einen neuen kundenspezifischen Preis.
@@ -24,6 +25,47 @@ export async function createKundenPreis(data: {
     artikel: saved.artikel.toString(),
     customer: saved.customer.toString(),
     aufpreis: saved.aufpreis,
+  };
+}
+
+/**
+ * Setzt/erstellt den Aufpreis für einen Kunden+Artikel basierend auf einem gewünschten Gesamtpreis.
+ * Berechnung: aufpreis = gesamtpreis - artikel.preis
+ * Wenn noch kein Eintrag existiert, wird er erstellt; andernfalls aktualisiert.
+ */
+export async function setAufpreisByGesamtpreis(
+  data: { artikel: string; customer: string; gesamtpreis: number },
+  currentUser: { role: string[] }
+): Promise<KundenPreisResource> {
+  if (!currentUser.role.includes("admin")) {
+    throw new Error("Admin-Zugriff erforderlich");
+  }
+
+  // Basispreis des Artikels holen
+  const artikelDoc = await ArtikelModel.findById(data.artikel).select('preis');
+  if (!artikelDoc) {
+    throw new Error('Artikel nicht gefunden');
+  }
+
+  const basispreis = Number((artikelDoc as any).preis ?? 0);
+  const gesamtpreis = Number(data.gesamtpreis ?? 0);
+  const aufpreis = gesamtpreis - basispreis;
+
+  // Upsert des Kundenpreis-Eintrags
+  const updated = await KundenPreisModel.findOneAndUpdate(
+    { customer: data.customer, artikel: data.artikel },
+    {
+      $set: { aufpreis },
+      $setOnInsert: { customer: data.customer, artikel: data.artikel },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  ).exec();
+
+  return {
+    id: updated!._id.toString(),
+    artikel: updated!.artikel.toString(),
+    customer: updated!.customer.toString(),
+    aufpreis: updated!.aufpreis,
   };
 }
 

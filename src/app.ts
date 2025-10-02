@@ -15,6 +15,7 @@ import reihenfolgeVorlageRouter from './routes/ReihenfolgeVorlageRoutes';
 import tourRouter from './routes/TourRoutes';
 import tourStopRouter from './routes/TourStopRoutes';
 import samsara from './api/samsara'
+import { belegRouter } from './routes/BelegRoutes';
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use("/api/region-rule", regionRuleRouter);
 app.use("/api/reihenfolge-vorlage", reihenfolgeVorlageRouter);
 app.use("/api/tour", tourRouter)
 app.use("/api/tour-stop", tourStopRouter)
+app.use("/api/beleg", belegRouter)
 
 
 export default app;

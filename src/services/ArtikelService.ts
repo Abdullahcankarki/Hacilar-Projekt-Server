@@ -108,7 +108,11 @@ export async function getAllArtikel(
       : options.erfassungsModus;
   }
   if (options?.name && options.name.trim().length > 0) {
-    query.name = { $regex: options.name.trim(), $options: 'i' };
+    const escaped = options.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    query.$or = [
+      { name: { $regex: escaped, $options: 'i' } },
+      { artikelNummer: { $regex: escaped, $options: 'i' } },
+    ];
   }
 
   const totalDocsAll = await ArtikelModel.estimatedDocumentCount();
@@ -199,7 +203,11 @@ export async function getAllArtikelClean(
       : options.erfassungsModus;
   }
   if (options?.name && options.name.trim().length > 0) {
-    query.name = { $regex: options.name.trim(), $options: 'i' };
+    const escaped = options.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    query.$or = [
+      { name: { $regex: escaped, $options: 'i' } },
+      { artikelNummer: { $regex: escaped, $options: 'i' } },
+    ];
   }
 
   const total = await ArtikelModel.countDocuments(query);

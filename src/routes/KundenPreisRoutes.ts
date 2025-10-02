@@ -9,6 +9,7 @@ import {
   deleteKundenPreis,
   getKundenPreisByArtikelId,
   setAufpreisForArtikelByFilter,
+  setAufpreisByGesamtpreis,
 } from '../services/KundenPreisService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -91,6 +92,42 @@ kundenPreisRouter.post(
         { kategorie, region },
         { role: req.user?.role || [] }
       );
+      res.status(200).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /kundenpreise/set-gesamtpreis
+// Setzt den Aufpreis basierend auf einem gewünschten Gesamtpreis (nur Admins)
+kundenPreisRouter.post(
+  '/set-gesamtpreis',
+  authenticate,
+  isAdmin,
+  [
+    body('artikel')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('Artikel-ID ist erforderlich')
+      .isMongoId()
+      .withMessage('Ungültige Artikel-ID'),
+    body('customer')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('Kunden-ID ist erforderlich')
+      .isMongoId()
+      .withMessage('Ungültige Kunden-ID'),
+    body('gesamtpreis')
+      .isNumeric()
+      .withMessage('Gesamtpreis muss eine Zahl sein'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await setAufpreisByGesamtpreis(req.body, { role: req.user?.role || [] });
       res.status(200).json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
