@@ -189,11 +189,13 @@ export async function getArtikelPositionById(
   if (!position) {
     throw new Error("Artikelposition nicht gefunden");
   }
+  const artikel = await ArtikelModel.findById(position.artikel)
 
   return {
     id: position._id.toString(),
     artikel: position.artikel.toString(),
     artikelName: position.artikelName,
+    artikelNummer: artikel?.artikelNummer,
     menge: position.menge,
     einheit: position.einheit,
     einzelpreis: position.einzelpreis,

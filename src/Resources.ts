@@ -99,6 +99,7 @@ export type ArtikelPositionResource = {
   id?: string; // Eindeutige ID der Position
   artikel: string; // ID des Artikels (als String)
   artikelName?: string;
+  artikelNummer?: string;
   menge: number; // Menge des Artikels
   einheit: "kg" | "stück" | "kiste" | "karton"; // Einheit der Menge
   einzelpreis: number; // Preis pro Gewichtseinheit für den Kunden
