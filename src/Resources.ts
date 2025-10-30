@@ -314,3 +314,117 @@ export type TourSplitLog = {
   mode: "plz_bucket" | "capacity" | "round_robin";
   note?: string;
 };
+
+// ===== Bestandsmodul: neue Ressourcen & Enums =====
+
+// Lagerbereiche: aktuell nur TK / Nicht-TK
+export type Lagerbereich = "TK" | "NON_TK";
+
+// Charge (Chargenstammdaten)
+export type ChargeResource = {
+  id?: string;
+  artikelId: string;            // Verweis auf ArtikelResource.id
+  // Denormalisierte Felder für Klarheit
+  artikelName?: string;
+  artikelNummer?: string;
+  lieferantId?: string;         // optionaler Verweis auf Lieferant
+  mhd: string;                  // ISO-Datum YYYY-MM-DD
+  schlachtDatum?: string;       // ISO-Datum
+  isTK: boolean;                // muss zum Lagerbereich passen (nur Warnung)
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+// Reservierungen (nicht chargengebunden, Charge erst bei Kommissionierung)
+export type ReservierungStatus = "AKTIV" | "ERFUELLT" | "AUFGELOEST";
+
+export type ReservierungResource = {
+  id?: string;
+  artikelId: string;            // Verweis auf ArtikelResource.id
+  // Denormalisierte Felder für Klarheit
+  artikelName?: string;
+  artikelNummer?: string;
+  kundeName?: string;
+  lieferDatumText?: string;
+  chargeId?: string;            // optional, falls vorgebunden
+  auftragId: string;            // Verweis auf AuftragResource.id
+  lieferDatum: string;          // ISO-Datum
+  menge: number;                // reservierte Menge
+  status: ReservierungStatus;
+  createdAt?: string;
+  createdBy?: string;           // Mitarbeiter-ID
+};
+
+// Anlieferung (Unterwegs)
+export type AnlieferungStatus = "ANGEKUENDIGT" | "TEILGELIEFERT" | "ERLEDIGT";
+
+export type AnlieferungResource = {
+  id?: string;
+  artikelId: string;            // Verweis auf ArtikelResource.id
+  // Denormalisierte Felder für Klarheit
+  artikelName?: string;
+  artikelNummer?: string;
+  lieferantName?: string;
+  chargeId?: string;            // falls bereits bekannt/angelegt
+  lieferantId?: string;
+  erwartetAm: string;           // ISO-Datum
+  menge: number;
+  status: AnlieferungStatus;
+  createdAt?: string;
+  createdBy?: string;           // Mitarbeiter-ID
+};
+
+// Bewegungsjournal (Single Source of Truth)
+export type BewegungsTyp =
+  | "WARENEINGANG"
+  | "WARENAUSGANG"
+  | "RESERVIERUNG"
+  | "RESERVIERUNG_AUFLOESEN"
+  | "KOMMISSIONIERUNG"
+  | "MULL"
+  | "INVENTUR_KORREKTUR"
+  | "UMBUCHUNG_HIN"
+  | "UMBUCHUNG_WEG"
+  | "RUECKLIEFERUNG_KUNDE"
+  | "RUECKLIEFERUNG_LIEFERANT"
+  | "ANLIEFERUNG_ERFASST"
+  | "ANLIEFERUNG_ERLEDIGT";
+
+export type BewegungResource = {
+  id?: string;
+  timestamp: string;            // ISO-String mit Uhrzeit
+  userId?: string;              // Mitarbeiter-ID, der die Buchung ausgelöst hat
+  typ: BewegungsTyp;
+  artikelId: string;
+  // Denormalisierte Felder für Klarheit
+  artikelName?: string;
+  artikelNummer?: string;
+  kundeName?: string;
+  lieferDatum?: string;
+  chargeId?: string;            // z. B. bei Abgang/Kommissionierung
+  menge: number;                // positiv/negativ wird aus Typ abgeleitet
+  lagerbereich: Lagerbereich;   // "TK" | "NON_TK"
+  auftragId?: string;           // Belegbezüge
+  lieferscheinId?: string;
+  gutschriftId?: string;
+  notiz?: string;
+  // optionale Metadaten (insb. bei Eingängen/Zerlegungserzeugnissen)
+  mhd?: string;
+  schlachtDatum?: string;
+  isTK?: boolean;
+};
+
+// Materialisierte Sicht für schnelle Abfragen in der UI
+export type BestandAggResource = {
+  id?: string;
+  artikelId: string;
+  // Denormalisierte Felder für Klarheit
+  artikelName?: string;
+  artikelNummer?: string;
+  chargeId?: string;
+  lagerbereich: Lagerbereich;
+  verfuegbar: number;           // physisch verfügbar
+  reserviert: number;           // insgesamt reserviert (summe aller Reservierungen)
+  unterwegs: number;            // noch nicht eingetroffen
+  updatedAt?: string;
+};

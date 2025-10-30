@@ -8,6 +8,11 @@ import { getKundenPreis } from "./KundenPreisService"; // Pfad ggf. anpassen
 import { ZerlegeAuftragModel } from "../model/ZerlegeAuftragModel";
 import mongoose from "mongoose";
 
+import { BewegungModel } from "../model/BewegungsModel";
+import { BestandAggModel } from "../model/BestandsAggModel";
+import { ChargeModel } from "../model/ChargeModel";
+import type { Lagerbereich } from "../Resources";
+
 // ... Importe bleiben gleich
 
 const EMPTY_ARTIKEL = {
@@ -17,6 +22,129 @@ const EMPTY_ARTIKEL = {
   gewichtProKiste: 1,
   gewichtProKarton: 1,
 };
+
+// ---------- Bestands-Sync (Kommissionierung) Helpers ----------
+function toISODate(d?: Date | string | null): string | undefined {
+  if (!d) return undefined;
+  const dt = typeof d === "string" ? new Date(d) : d;
+  return isNaN(dt.getTime()) ? undefined : dt.toISOString();
+}
+
+function round3(n: number): number { return Math.round(n * 1000) / 1000; }
+
+async function getArtikelGewichte(artikelId: string) {
+  const a = await ArtikelModel.findById(artikelId).lean();
+  return {
+    gewichtProStueck: Number(a?.gewichtProStueck ?? 0) || 0,
+    gewichtProKiste: Number(a?.gewichtProKiste ?? 0) || 0,
+    gewichtProKarton: Number(a?.gewichtProKarton ?? 0) || 0,
+    name: a?.name,
+    artikelNummer: (a as any)?.artikelNummer,
+  };
+}
+
+async function sumBereitsGebuchtKg(auftragId: string, artikelId: string, positionId: string): Promise<number> {
+  const docs = await BewegungModel.aggregate([
+    { $match: { typ: "KOMMISSIONIERUNG", auftragId: new mongoose.Types.ObjectId(auftragId), artikelId: new mongoose.Types.ObjectId(artikelId), notiz: { $regex: `\\[POS:${positionId}\\]` } } },
+    { $group: { _id: null, sum: { $sum: "$menge" } } },
+  ]);
+  // menge ist negativ bei KOMMISSIONIERUNG → wir nehmen den Absolutwert
+  const sum = docs[0]?.sum ?? 0;
+  return Math.abs(Number(sum) || 0);
+}
+
+async function upsertBestandAgg(
+  p: { artikelId: string; chargeId: string; lagerbereich: Lagerbereich; deltaVerfuegbar: number },
+  session: mongoose.ClientSession
+) {
+  await BestandAggModel.updateOne(
+    { artikelId: new mongoose.Types.ObjectId(p.artikelId), chargeId: new mongoose.Types.ObjectId(p.chargeId), lagerbereich: p.lagerbereich },
+    {
+      $setOnInsert: { artikelId: new mongoose.Types.ObjectId(p.artikelId), chargeId: new mongoose.Types.ObjectId(p.chargeId), lagerbereich: p.lagerbereich },
+      $inc: { verfuegbar: p.deltaVerfuegbar },
+      $set: { updatedAt: new Date() },
+    },
+    { upsert: true, session }
+  );
+}
+
+/**
+ * Ermittelt die zu buchende Zielmenge in **kg** aus den Kommissionierungsfeldern einer Position.
+ * Priorität: Nettogewicht > kommissioniertMenge*Einheitsgewicht.
+ */
+async function computeZielMengeKg(position: any): Promise<number> {
+  const artikelId = position.artikel?.toString();
+  const einheit = position.kommissioniertEinheit || position.einheit;
+  const kgFromNetto = typeof position.nettogewicht === "number" && isFinite(position.nettogewicht) ? position.nettogewicht : undefined;
+  if (kgFromNetto !== undefined) return round3(Math.max(0, kgFromNetto));
+
+  const menge = typeof position.kommissioniertMenge === "number" ? position.kommissioniertMenge : position.menge;
+  if (!artikelId || !isFinite(menge) || menge <= 0) return 0;
+  if (einheit === "kg") return round3(menge);
+
+  const g = await getArtikelGewichte(artikelId);
+  const factor = einheit === "stück" ? g.gewichtProStueck : einheit === "kiste" ? g.gewichtProKiste : g.gewichtProKarton;
+  return round3(Math.max(0, menge * (factor || 0)));
+}
+
+/**
+ * Bucht Delta für diese Position gegen die angegebenen Chargen.
+ * - Delta > 0  → KOMMISSIONIERUNG (negativ)
+ * - Delta < 0  → INVENTUR_KORREKTUR (positiv, Rückbuchung)
+ */
+async function syncKommissionierungMitBestand(positionId: string, userId: string | undefined) {
+  const position = await ArtikelPosition.findById(positionId);
+  if (!position) return;
+  const auftrag = await Auftrag.findOne({ artikelPosition: position._id });
+  if (!auftrag) return;
+
+  const zielKg = await computeZielMengeKg(position as any);
+  const bereits = await sumBereitsGebuchtKg(auftrag._id.toString(), position.artikel.toString(), position._id.toString());
+  let delta = round3(zielKg - bereits);
+  if (Math.abs(delta) < 0.001) return; // nichts zu tun
+
+  const charges: string[] = Array.isArray((position as any).chargennummern) ? (position as any).chargennummern : [];
+  if (!charges.length) {
+    console.warn(`[BestandSync] Position ${position._id} hat keine Charge ausgewählt – Buchung übersprungen.`);
+    return;
+  }
+
+  // Lade Charge-Details, um Lagerbereich (TK/NON_TK) zu bestimmen
+  const chargeDocs = await ChargeModel.find({ _id: { $in: charges } }).lean();
+  if (!chargeDocs.length) return;
+
+  // Stückeln: gleichmäßig über alle angegebenen Chargen verteilen
+  const perCharge = round3(Math.abs(delta) / chargeDocs.length);
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      for (const ch of chargeDocs) {
+        const lagerbereich: Lagerbereich = ch.isTK ? "TK" : "NON_TK";
+        const mengeSigniert = delta > 0 ? -perCharge : perCharge; // Abgang = negativ; Rückbuchung = positiv
+        const bewegung = await new BewegungModel({
+          timestamp: new Date(),
+          userId: userId ? new mongoose.Types.ObjectId(userId) : undefined,
+          typ: delta > 0 ? "KOMMISSIONIERUNG" : "INVENTUR_KORREKTUR",
+          artikelId: position.artikel,
+          artikelName: position.artikelName,
+          chargeId: ch._id,
+          menge: mengeSigniert,
+          lagerbereich,
+          auftragId: auftrag._id,
+          notiz: `[POS:${position._id.toString()}] Auto-Sync aus ArtikelPositionService` ,
+          mhd: ch.mhd,
+          schlachtDatum: ch.schlachtDatum,
+          isTK: !!ch.isTK,
+        }).save({ session });
+
+        await upsertBestandAgg({ artikelId: position.artikel.toString(), chargeId: ch._id.toString(), lagerbereich, deltaVerfuegbar: mengeSigniert }, session);
+      }
+    });
+  } finally {
+    await session.endSession();
+  }
+}
 
 /**
  * Erstellt eine neue Artikelposition.
@@ -150,6 +278,15 @@ export async function createArtikelPosition(data: {
         }
       }
     }
+  }
+
+  // Falls bereits Kommissionierungswerte gesetzt wurden (Edge-Case) → Sync anstoßen
+  try {
+    if (savedPosition.kommissioniertMenge || savedPosition.nettogewicht) {
+      await syncKommissionierungMitBestand(savedPosition._id.toString(), undefined);
+    }
+  } catch (e) {
+    console.error("[CreatePosition→Bestand] Sync fehlgeschlagen:", (e as Error)?.message);
   }
 
   return {
@@ -479,6 +616,12 @@ export async function updateArtikelPositionKommissionierung(
   // In allen anderen Fällen: diese Felder NICHT ändern (ignorieren)
 
   const updated = await position.save();
+  // --- Bestands-Synchronisierung nach Kommissionierungs-/Kontroll-Update ---
+  try {
+    await syncKommissionierungMitBestand(updated._id.toString(), userId);
+  } catch (e) {
+    console.error("[Kommissionierung→Bestand] Sync fehlgeschlagen:", (e as Error)?.message);
+  }
   return {
     id: updated._id.toString(),
     artikel: updated.artikel.toString(),

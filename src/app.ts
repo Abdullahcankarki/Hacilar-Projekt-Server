@@ -16,6 +16,12 @@ import tourRouter from './routes/TourRoutes';
 import tourStopRouter from './routes/TourStopRoutes';
 import samsara from './api/samsara'
 import { belegRouter } from './routes/BelegRoutes';
+import chargeRouter from './routes/inventory/ChargeRoutes';
+import bestandRouter from './routes/inventory/BestandsRoutes';
+import historieRouter from './routes/inventory/HistorieRoutes';
+import muellRouter from './routes/inventory/MuellRoutes';
+import reservierungenRouter from './routes/inventory/ReservierungsRoutes';
+import warnungenRouter from './routes/inventory/WarnungenRoutes';
 
 const app = express();
 
@@ -55,6 +61,12 @@ app.use("/api/reihenfolge-vorlage", reihenfolgeVorlageRouter);
 app.use("/api/tour", tourRouter)
 app.use("/api/tour-stop", tourStopRouter)
 app.use("/api/beleg", belegRouter)
+app.use("/api/charges", chargeRouter);
+app.use("/api/bestand", bestandRouter);
+app.use("/api/historie", historieRouter);
+app.use("/api/muell", muellRouter);
+app.use("/api/reservierungen", reservierungenRouter);
+app.use("/api/warnungen", warnungenRouter);
 
 
 export default app;

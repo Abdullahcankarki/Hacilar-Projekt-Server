@@ -3,6 +3,7 @@ import { Document, Schema, Types, model } from "mongoose";
 export interface IAuftrag extends Document {
   auftragsnummer: string;
   kunde: Types.ObjectId; // Referenz zu Kunde-Model
+  kundeName: string;
   artikelPosition: Types.ObjectId[]; // Array von Referenzen zu ArtikelPositionen
   status: "offen" | "in Bearbeitung" | "abgeschlossen" | "storniert"; // Auftragsstatus
   lieferdatum: Date; // Gewünschtes Lieferdatum
@@ -43,6 +44,7 @@ const auftragSchema = new Schema<IAuftrag>(
   {
     auftragsnummer: { type: String, default: "0" },
     kunde: { type: Schema.Types.ObjectId, ref: "Kunde", required: true },
+    kundeName: { type: String, required: false},
     artikelPosition: [{ type: Schema.Types.ObjectId, ref: "ArtikelPosition" }],
     status: {
       type: String,

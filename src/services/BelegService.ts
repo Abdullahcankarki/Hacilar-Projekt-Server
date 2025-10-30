@@ -607,6 +607,7 @@ async function renderRechnung(doc: PDFKitDocument, auftrag: any, kunde: any, opt
  * Für Lieferschein und Rechnung werden die Daten komplett aus dem Auftrag genommen.
  * Für Gutschrift und Preisdifferenz müssen zusätzliche Daten übergeben werden.
  */
+
 export async function generateBelegPdf(
   auftragId: string,
   belegTyp: BelegTyp,
@@ -666,6 +667,59 @@ export async function generateBelegPdf(
   });
   dlog('generateBelegPdf:end', { bytes: Buffer.concat(buffers).length });
   return pdfBuffer;
+}
+
+/**
+ * Generiert mehrere Belege (einzeln) und liefert sie als Liste zurück.
+ * Wichtig: Es wird **kein** Sammel-PDF erzeugt. Jede Ausgabe ist eine eigene PDF-Datei.
+ *
+ * Frontend-Use-Case: Benutzer wählt mehrere Aufträge → Backend liefert Array von
+ * { auftragId, filename, pdf } zurück. Das Frontend kann dann pro Eintrag einen
+ * Download anstoßen.
+ */
+export async function generateBelegePdfs(
+  auftragIds: string[],
+  belegTyp: BelegTyp
+): Promise<{ auftragId: string; filename: string; pdf: Buffer }[]> {
+  if (!Array.isArray(auftragIds) || auftragIds.length === 0) {
+    throw new Error("Keine Auftrag-IDs übergeben");
+  }
+
+  const results: { auftragId: string; filename: string; pdf: Buffer }[] = [];
+
+  for (const auftragId of auftragIds) {
+    try {
+      const auftrag = await Auftrag.findById(auftragId);
+      if (!auftrag) {
+        dlog('generateBelegePdfs: Auftrag nicht gefunden', auftragId);
+        continue; // Überspringen statt komplett abbrechen
+      }
+      const kunde = await Kunde.findById(auftrag.kunde).catch(() => undefined);
+
+      // Sinnvollen Dateinamen erzeugen
+      const typLabel =
+        belegTyp === 'rechnung' ? 'Rechnung' :
+        belegTyp === 'lieferschein' ? 'Lieferschein' :
+        belegTyp === 'gutschrift' ? 'Gutschrift' :
+        belegTyp === 'preisdifferenz' ? 'Preisdifferenz' : 'Beleg';
+
+      const rn = (auftrag as any).rechnungsNummer || (auftrag as any).auftragsnummer || auftragId;
+      const kdName = (kunde?.name ? String(kunde.name) : 'Kunde').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]/g, '');
+      const filename = `${typLabel}_${rn}_${kdName}.pdf`;
+
+      // Wiederverwendung der Einzelfunktion
+      const pdf = await generateBelegPdf(auftragId, belegTyp);
+
+      results.push({ auftragId, filename, pdf });
+    } catch (err: any) {
+      dlog('generateBelegePdfs: Fehler bei', auftragId, err?.message || err);
+      // Fehlerhafte IDs werden übersprungen – optional könnte man hier auch
+      // einen Platzhalter mit Fehlermeldung zurückgeben
+      continue;
+    }
+  }
+
+  return results;
 }
 
 /**

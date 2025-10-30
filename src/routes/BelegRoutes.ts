@@ -6,6 +6,7 @@ import {
   logEmailVersand,
   getBelegeForAuftrag,
   getEmailLogsForAuftrag,
+  generateBelegePdfs,
 } from "../services/BelegService";
 import { BelegResource, BelegTyp } from "../Resources";
 import { validate } from "./helper-hooks";
@@ -31,6 +32,35 @@ belegRouter.post(
       const pdfBuffer = await generateBelegPdf(auftragId, typ as BelegTyp, inputData);
       res.setHeader("Content-Type", "application/pdf");
       res.send(pdfBuffer);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+/**
+ * Mehrere Belege gleichzeitig generieren
+ * Erwartet: { auftragIds: string[], belegTyp: BelegTyp }
+ * Antwort: Array von { auftragId, filename, dataBase64, mime }
+ */
+belegRouter.post(
+  "/batch/pdf",
+  [
+    body("auftragIds").isArray({ min: 1 }),
+    body("belegTyp").isIn(["lieferschein", "rechnung", "gutschrift", "preisdifferenz"]),
+  ],
+  validate,
+  async (req: Request, res: Response) => {
+    const { auftragIds, belegTyp } = req.body as { auftragIds: string[]; belegTyp: BelegTyp };
+    try {
+      const files = await generateBelegePdfs(auftragIds, belegTyp);
+      const result = files.map(f => ({
+        auftragId: f.auftragId,
+        filename: f.filename,
+        dataBase64: f.pdf.toString("base64"),
+        mime: "application/pdf",
+      }));
+      res.json({ files: result });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }

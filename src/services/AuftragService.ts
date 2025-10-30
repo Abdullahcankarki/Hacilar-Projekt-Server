@@ -24,6 +24,10 @@ import { TourStop } from "../model/TourStopModel";
 import { Tour } from "../model/TourModel";
 import { Fahrzeug } from "../model/FahrzeugModel";
 
+import { ReservierungModel } from "../model/ReservierungModel";
+import { createReservierung, updateReservierung, cancelReservierung, listReservierungen } from "./inventory/ReservierungsService";
+import { BestandAggModel } from "../model/BestandsAggModel";
+
 const ZONE = "Europe/Berlin" as const;
 
 export function parseBerlinYmdToUtcDate(
@@ -63,6 +67,102 @@ function berlinIsoFromDate(d?: Date | string | null): string | undefined {
   if (Number.isNaN(js.valueOf())) return undefined;
   const dt = DateTime.fromJSDate(js, { zone: ZONE });
   return dt.isValid ? dt.toISODate() ?? undefined : undefined;
+}
+
+/**
+ * Aggregiert alle ArtikelPositionen eines Auftrags zu Bedarf je Artikel.
+ * Gibt eine Map artikelId -> menge zurück.
+ */
+async function aggregatePositionsByArtikel(auftragId: string): Promise<Map<string, number>> {
+  const posDocs = await ArtikelPosition.find({ auftrag: auftragId }, { artikel: 1, menge: 1 }).lean();
+  const map = new Map<string, number>();
+  for (const p of posDocs) {
+    const aid = (p as any).artikel?.toString();
+    const m = Number((p as any).menge ?? 0);
+    if (!aid || !isFinite(m) || m <= 0) continue;
+    map.set(aid, (map.get(aid) ?? 0) + m);
+  }
+  return map;
+}
+
+/**
+ * Erstellt/aktualisiert/storniert Reservierungen so, dass sie den ArtikelPositionen
+ * des Auftrags entsprechen (nicht chargengebunden). Idempotent.
+ */
+async function syncReservierungenForAuftrag(auftragId: string): Promise<void> {
+  const auftrag = await Auftrag.findById(auftragId).select({ lieferdatum: 1 }).lean();
+  if (!auftrag) throw new Error("Auftrag nicht gefunden");
+  if (!auftrag.lieferdatum) {
+    // Kein Lieferdatum -> keine Reservierungen
+    const existing = await ReservierungModel.find({ auftragId }).select({ _id: 1 }).lean();
+    for (const r of existing) await cancelReservierung((r as any)._id.toString());
+    return;
+  }
+  const lieferDatumISO = berlinIsoFromDate(auftrag.lieferdatum)!; // YYYY-MM-DD
+  const bedarf = await aggregatePositionsByArtikel(auftragId);
+
+  // Bestehende Reservierungen je Artikel holen (nur AKTIV)
+  const existing = await ReservierungModel.find({ auftragId, status: "AKTIV" }).lean();
+  const exByArt = new Map<string, any>(existing.map((r: any) => [r.artikelId.toString(), r]));
+
+  // 1) Upsert/Update für alle benötigten Artikel
+  for (const [artikelId, menge] of bedarf.entries()) {
+    const ex = exByArt.get(artikelId);
+    if (!ex) {
+      await createReservierung({ artikelId, auftragId, lieferDatum: lieferDatumISO, menge });
+    } else {
+      const needsUpdate = (Number(ex.menge) !== Number(menge)) || (berlinIsoFromDate(ex.lieferDatum) !== lieferDatumISO);
+      if (needsUpdate) {
+        await updateReservierung((ex as any)._id.toString(), { menge, lieferDatum: lieferDatumISO });
+      }
+      exByArt.delete(artikelId);
+    }
+  }
+
+  // 2) Übrige bestehende Reservierungen auflösen (Positionen entfernt)
+  for (const ex of exByArt.values()) {
+    await cancelReservierung((ex as any)._id.toString());
+  }
+}
+
+/**
+ * Erzeugt Warnungen für einen Auftrag (ohne zu blockieren):
+ * - Überreservierung an Lieferdatum (reserviert gesamt > verfügbar)
+ * Liefert ein Array einfacher Warnobjekte für das Frontend.
+ */
+async function computeBestandsWarnungenForAuftrag(auftragId: string): Promise<Array<{ artikelId: string; artikelName?: string; artikelNummer?: string; lieferDatum: string; benoetigt: number; verfuegbar: number; reserviertAndere: number }>> {
+  const auftrag = await Auftrag.findById(auftragId).select({ lieferdatum: 1 }).lean();
+  if (!auftrag?.lieferdatum) return [];
+  const lieferDatumISO = berlinIsoFromDate(auftrag.lieferdatum)!;
+  const bedarf = await aggregatePositionsByArtikel(auftragId);
+
+  const artikelIds = Array.from(bedarf.keys());
+  if (!artikelIds.length) return [];
+
+  // Verfügbar je Artikel (Summe über alle Charges/Lagerbereiche)
+  const bestAgg = await BestandAggModel.aggregate([
+    { $match: { artikelId: { $in: artikelIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
+    { $group: { _id: "$artikelId", verfuegbar: { $sum: "$verfuegbar" } } },
+  ]);
+  const verfMap = new Map<string, number>(bestAgg.map((r: any) => [r._id.toString(), Number(r.verfuegbar ?? 0)]));
+
+  // Andere Reservierungen bis einschl. Lieferdatum (ohne diesen Auftrag)
+  const andereRes = await ReservierungModel.aggregate([
+    { $match: { auftragId: { $ne: new mongoose.Types.ObjectId(auftragId) }, status: "AKTIV", lieferDatum: { $lte: new Date(lieferDatumISO + "T23:59:59.999Z") }, artikelId: { $in: artikelIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
+    { $group: { _id: "$artikelId", reserviert: { $sum: "$menge" } } },
+  ]);
+  const resMap = new Map<string, number>(andereRes.map((r: any) => [r._id.toString(), Number(r.reserviert ?? 0)]));
+
+  // Artikelnamen/Nummern aus einer der Collections (hier: ReservierungModel könnte fehlen) → wir skippen und liefern nur IDs
+  const warnungen: Array<{ artikelId: string; artikelName?: string; artikelNummer?: string; lieferDatum: string; benoetigt: number; verfuegbar: number; reserviertAndere: number }> = [];
+  for (const [artikelId, benoetigt] of bedarf.entries()) {
+    const verf = Number(verfMap.get(artikelId) ?? 0);
+    const resAnd = Number(resMap.get(artikelId) ?? 0);
+    if (verf - resAnd < benoetigt) {
+      warnungen.push({ artikelId, lieferDatum: lieferDatumISO, benoetigt, verfuegbar: verf, reserviertAndere: resAnd });
+    }
+  }
+  return warnungen;
 }
 
 async function generiereAuftragsnummer(): Promise<string> {
@@ -134,9 +234,11 @@ function convertAuftragToResource(
         ? auftrag.kunde
         : auftrag.kunde?._id?.toString() || "",
     kundeName:
-      typeof (auftrag as any).kunde === "object" && (auftrag as any).kunde?.name
-        ? (auftrag as any).kunde.name
-        : "",
+      (auftrag as any).kundeName
+        ? (auftrag as any).kundeName
+        : (typeof (auftrag as any).kunde === "object" && (auftrag as any).kunde?.name
+            ? (auftrag as any).kunde.name
+            : ""),
     artikelPosition: Array.isArray(auftrag.artikelPosition)
       ? auftrag.artikelPosition.map((id) => id?.toString()).filter(Boolean)
       : [],
@@ -182,9 +284,12 @@ export async function createAuftrag(data: {
 }): Promise<AuftragResource> {
   const neueNummer = await generiereAuftragsnummer();
   const parsedLieferdatumCreate = parseBerlinYmdToUtcDate(data.lieferdatum);
+  // Kunde-Name denormalisiert mitschreiben
+  const kdoc = await Kunde.findById(data.kunde, { name: 1 }).lean();
   const newAuftrag = new Auftrag({
     auftragsnummer: neueNummer,
     kunde: data.kunde,
+    kundeName: kdoc?.name,
     artikelPosition: data.artikelPosition,
     status: data.status ?? "offen",
     lieferdatum: parsedLieferdatumCreate,
@@ -202,6 +307,16 @@ export async function createAuftrag(data: {
         (err as Error)?.message
       );
     }
+  }
+  try {
+    await syncReservierungenForAuftrag(savedAuftrag._id.toString());
+    // Optional: Warnungen berechnen (nicht blockierend)
+    const _warn = await computeBestandsWarnungenForAuftrag(savedAuftrag._id.toString());
+    if (_warn.length) {
+      console.warn("[createAuftrag] Bestandswarnungen:", _warn);
+    }
+  } catch (e) {
+    console.error("[createAuftrag] Reservierungs-Sync fehlgeschlagen:", (e as Error)?.message);
   }
   const totals = await computeTotals(savedAuftrag);
   // Persistiere die berechneten Totale auch im Auftrag-Dokument (falls Felder im Schema vorhanden sind)
@@ -448,7 +563,16 @@ export async function updateAuftrag(
 
   // 2) Update-Daten bauen
   const updateData: any = {};
-  if (data.kunde) updateData.kunde = data.kunde;
+  if (data.kunde) {
+    updateData.kunde = data.kunde;
+    try {
+      const kdoc = await Kunde.findById(data.kunde, { name: 1 }).lean();
+      if (kdoc?.name) updateData.kundeName = kdoc.name;
+    } catch (e) {
+      // falls Lookup fehlschlägt, Auftrag-Update trotzdem nicht verhindern
+      console.warn("[updateAuftrag] kundeName konnte nicht gesetzt werden:", (e as Error)?.message);
+    }
+  }
   if (data.artikelPosition) updateData.artikelPosition = data.artikelPosition;
   if (data.status) updateData.status = data.status;
 
@@ -522,6 +646,20 @@ export async function updateAuftrag(
         (err as Error)?.message
       );
     }
+  }
+
+  // 5b) Reservierungen nachziehen, wenn sich Lieferdatum oder Positionen geändert haben
+  try {
+    const positionsChanged = Array.isArray(data.artikelPosition); // Heuristik: explizit übergeben
+    if (lieferdatumWurdeGeaendert || positionsChanged) {
+      await syncReservierungenForAuftrag(updatedAuftrag._id.toString());
+      const _warn = await computeBestandsWarnungenForAuftrag(updatedAuftrag._id.toString());
+      if (_warn.length) {
+        console.warn("[updateAuftrag] Bestandswarnungen:", _warn);
+      }
+    }
+  } catch (e) {
+    console.error("[updateAuftrag] Reservierungs-Sync fehlgeschlagen:", (e as Error)?.message);
   }
 
   // 6) Totals & Rückgabe
@@ -651,6 +789,8 @@ export async function deleteAuftrag(id: string): Promise<void> {
 
       // 3) Auftrag löschen
       await Auftrag.deleteOne({ _id: auftrag._id }).session(session);
+      // 4) Zugehörige Reservierungen stornieren
+      await ReservierungModel.updateMany({ auftragId: auftrag._id, status: "AKTIV" }, { $set: { status: "AUFGELOEST" } }).session(session);
     });
   } finally {
     await session.endSession();
@@ -1047,4 +1187,11 @@ export async function createAuftragQuick(data: {
 
   // Ohne Lieferdatum: aktuellen Stand inkl. Summen zurückgeben
   return await getAuftragById(created.id!);
+}
+
+/**
+ * On-Demand: Bestandswarnungen für einen Auftrag berechnen (für das Frontend nutzbar).
+ */
+export async function getBestandsWarnungenForAuftrag(auftragId: string) {
+  return computeBestandsWarnungenForAuftrag(auftragId);
 }
