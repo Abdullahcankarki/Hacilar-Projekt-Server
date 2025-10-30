@@ -439,3 +439,86 @@ export async function manuellerZugang(params: {
     await session.endSession();
   }
 }
+
+/**
+ * Komplett-Löschung eines Bestands (Charge) inkl. aller zugehörigen Daten:
+ * - Reservierungen (zu dieser Charge)
+ * - Bewegungen (Journal)
+ * - Bestand-Aggregate (BestandAgg)
+ * - Charge-Stammsatz
+ *
+ * Hinweis: läuft in einer Transaktion. Gibt die Anzahl gelöschter Dokumente zurück.
+ */
+export async function deleteBestandKomplett(params: {
+  chargeId: string;
+}): Promise<{
+  deleted: { reservierungen: number; bewegungen: number; agg: number; charge: number };
+}> {
+  if (!params?.chargeId) throw new Error("chargeId ist erforderlich");
+  const chargeObjId = new Types.ObjectId(params.chargeId);
+
+  const session = await mongoose.startSession();
+  try {
+    let out = { reservierungen: 0, bewegungen: 0, agg: 0, charge: 0 };
+    await session.withTransaction(async () => {
+      const [resDel, movDel, aggDel, chargeDel] = await Promise.all([
+        ReservierungModel.deleteMany({ chargeId: chargeObjId }).session(session),
+        BewegungModel.deleteMany({ chargeId: chargeObjId }).session(session),
+        BestandAggModel.deleteMany({ chargeId: chargeObjId }).session(session),
+        ChargeModel.deleteOne({ _id: chargeObjId }).session(session),
+      ]);
+
+      out = {
+        reservierungen: resDel?.deletedCount ?? 0,
+        bewegungen: movDel?.deletedCount ?? 0,
+        agg: aggDel?.deletedCount ?? 0,
+        charge: chargeDel?.deletedCount ?? 0,
+      };
+    });
+
+    return { deleted: out };
+  } finally {
+    await session.endSession();
+  }
+}
+
+/**
+ * Komplett-Löschung ALLER Bestände (sämtlicher Charges) zu einem Artikel.
+ * Entfernt für den Artikel alle: Reservierungen, Bewegungen, Aggregationen und Charges.
+ */
+export async function deleteBestandKomplettByArtikel(params: {
+  artikelId: string;
+}): Promise<{
+  deleted: { reservierungen: number; bewegungen: number; agg: number; charges: number };
+}> {
+  if (!params?.artikelId) throw new Error("artikelId ist erforderlich");
+  const artikelObjId = new Types.ObjectId(params.artikelId);
+
+  const session = await mongoose.startSession();
+  try {
+    let out = { reservierungen: 0, bewegungen: 0, agg: 0, charges: 0 };
+    await session.withTransaction(async () => {
+      // Alle Charge-IDs zum Artikel holen
+      const chargeIds = await ChargeModel.find({ artikelId: artikelObjId }, { _id: 1 }).session(session).lean();
+      const ids = chargeIds.map((c) => c._id);
+
+      const [resDel, movDel, aggDel, chargesDel] = await Promise.all([
+        ReservierungModel.deleteMany({ artikelId: artikelObjId }).session(session),
+        BewegungModel.deleteMany({ artikelId: artikelObjId }).session(session),
+        BestandAggModel.deleteMany({ artikelId: artikelObjId }).session(session),
+        ids.length ? ChargeModel.deleteMany({ _id: { $in: ids } }).session(session) : Promise.resolve({ deletedCount: 0 } as any),
+      ]);
+
+      out = {
+        reservierungen: resDel?.deletedCount ?? 0,
+        bewegungen: movDel?.deletedCount ?? 0,
+        agg: aggDel?.deletedCount ?? 0,
+        charges: (chargesDel as any)?.deletedCount ?? 0,
+      };
+    });
+
+    return { deleted: out };
+  } finally {
+    await session.endSession();
+  }
+}

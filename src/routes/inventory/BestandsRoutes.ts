@@ -7,6 +7,8 @@ import {
   getChargeView,
   getZeitreiseBestand,
   manuellerZugang,
+  deleteBestandKomplett,
+  deleteBestandKomplettByArtikel,
 } from "../../services/inventory/BestandsService";
 import type { LoginResource, Lagerbereich } from "../../Resources";
 
@@ -180,6 +182,44 @@ bestandRouter.post(
           : undefined,
       });
       res.status(201).json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+
+/**
+ * DELETE /bestand/charge/:id/komplett
+ * Löscht eine Charge inkl. aller Bewegungen, Reservierungen und Aggregationen.
+ */
+bestandRouter.delete(
+  "/charge/:id/komplett",
+  authenticate,
+  [param("id").isMongoId().withMessage("Ungültige Charge-ID")],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await deleteBestandKomplett({ chargeId: req.params.id });
+      res.json({ success: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+
+/**
+ * DELETE /bestand/artikel/:id/komplett
+ * Löscht alle Bestände eines Artikels inkl. zugehöriger Charges und Bewegungen.
+ */
+bestandRouter.delete(
+  "/artikel/:id/komplett",
+  authenticate,
+  [param("id").isMongoId().withMessage("Ungültige Artikel-ID")],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await deleteBestandKomplettByArtikel({ artikelId: req.params.id });
+      res.json({ success: true, ...result });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
