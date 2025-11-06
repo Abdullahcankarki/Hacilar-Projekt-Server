@@ -15,6 +15,7 @@ import {
   setAuftragInBearbeitung,
   getTourInfosForAuftraege,
   createAuftragQuick,
+  getBestellteArtikelAggregiert,
 } from "../services/AuftragService"; // Passe den Pfad ggf. an
 import { LoginResource } from "../Resources"; // Passe den Pfad ggf. an
 
@@ -531,6 +532,133 @@ auftragRouter.post(
       return res.json(map);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+
+/**
+ * GET /auftraege/bestellte-artikel
+ * Aggregierte Sicht auf bestellte Artikel (je nach groupBy).
+ * Erlaubte Rollen: admin, buchhaltung, statistik, support
+ * Query:
+ *   lieferdatumVon?: YYYY-MM-DD
+ *   lieferdatumBis?: YYYY-MM-DD
+ *   kundenKategorie?: string
+ *   kundenRegion?: string
+ *   kundeName?: string
+ *   artikelNr?: string
+ *   artikelName?: string
+ *   statusIn?: comma-separated (offen,in Bearbeitung,abgeschlossen,storniert)
+ *   groupBy?: artikel | artikelKunde | artikelKundeTag (default artikel)
+ *   sort?: mengeDesc|mengeAsc|preisDesc|preisAsc|artikelNameAsc|artikelNameDesc|kundeNameAsc|kundeNameDesc|lieferdatumAsc|lieferdatumDesc
+ *   debug?: boolean (optional, für Debug-Ausgaben)
+ */
+auftragRouter.get(
+  "/bestellte-artikel",
+  authenticate,
+  [
+    query("lieferdatumVon").optional().isISO8601(),
+    query("lieferdatumBis").optional().isISO8601(),
+    query("kundeName").optional().isString().trim(),
+    query("kundenKategorie").optional().isString().trim(),
+    query("kundenRegion").optional().isString().trim(),
+    query("artikelNr").optional().isString().trim(),
+    query("artikelName").optional().isString().trim(),
+    query("statusIn")
+      .optional()
+      .custom((val) => {
+        if (typeof val !== "string") return false;
+        const allowed = ["offen", "in Bearbeitung", "abgeschlossen", "storniert"];
+        return val.split(",").map((s) => s.trim()).every((s) => !s || allowed.includes(s));
+      })
+      .withMessage("statusIn muss eine Komma-Liste aus offen,in Bearbeitung,abgeschlossen,storniert sein"),
+    query("groupBy")
+      .optional()
+      .isIn(["artikel", "artikelKunde", "artikelKundeTag"])
+      .withMessage("groupBy muss artikel, artikelKunde oder artikelKundeTag sein"),
+    query("sort")
+      .optional()
+      .isIn([
+        "mengeDesc",
+        "mengeAsc",
+        "preisDesc",
+        "preisAsc",
+        "artikelNameAsc",
+        "artikelNameDesc",
+        "kundeNameAsc",
+        "kundeNameDesc",
+        "lieferdatumAsc",
+        "lieferdatumDesc",
+      ])
+      .withMessage("Ungültiger sort-Wert"),
+    // Add debug validator
+    query("debug").optional().isBoolean().toBoolean(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const roles = req.user?.role || [];
+      const arr = Array.isArray(roles) ? roles : [roles];
+      const allowed =
+        arr.includes("admin") ||
+        arr.includes("buchhaltung") ||
+        arr.includes("statistik") ||
+        arr.includes("support");
+      if (!allowed) {
+        return res.status(403).json({ error: "Zugriff verweigert" });
+      }
+
+      // Destructure debug from query
+      const {
+        lieferdatumVon,
+        lieferdatumBis,
+        kundeName,
+        kundenKategorie,
+        kundenRegion,
+        artikelNr,
+        artikelName,
+        statusIn,
+        groupBy,
+        sort,
+        debug,
+      } = req.query as any;
+
+      const params: any = {};
+      if (lieferdatumVon) params.lieferdatumVon = String(lieferdatumVon);
+      if (lieferdatumBis) params.lieferdatumBis = String(lieferdatumBis);
+      // Hinweis: Service interpretiert 'kundeName' jetzt als Kategorie (kunde.kategorie)
+      if (kundenKategorie) params.kundeName = String(kundenKategorie);
+      // Legacy: Falls keine Kategorie, aber kundeName (früher Name/Nummer) übergeben wurde, weiterhin unterstützen
+      else if (kundeName) params.kundeName = String(kundeName);
+      // Kunden-Region (regex contains, i)
+      if (kundenRegion) params.kundenRegion = String(kundenRegion);
+      if (artikelNr) params.artikelNr = String(artikelNr);
+      if (artikelName) params.artikelName = String(artikelName);
+      if (statusIn) {
+        params.statusIn = String(statusIn)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+      if (groupBy) params.groupBy = String(groupBy);
+      if (sort) params.sort = String(sort);
+      // Add debug to params if present
+      if (debug !== undefined) params.debug = Boolean(debug);
+
+      // Conditional debug logging
+      if (
+        process.env.DEBUG_BESTELLTE_ARTIKEL === "1" ||
+        debug === true ||
+        debug === "true"
+      ) {
+        console.log("[route:/auftraege/bestellte-artikel] query:", req.query);
+      }
+
+      const data = await getBestellteArtikelAggregiert(params);
+      return res.json(data);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
     }
   }
 );

@@ -29,6 +29,7 @@ import { createReservierung, updateReservierung, cancelReservierung, listReservi
 import { BestandAggModel } from "../model/BestandsAggModel";
 
 const ZONE = "Europe/Berlin" as const;
+const DEBUG_BESTELLTE = process.env.DEBUG_BESTELLTE_ARTIKEL === "1";
 
 export function parseBerlinYmdToUtcDate(
   input?: string | Date
@@ -1192,6 +1193,341 @@ export async function createAuftragQuick(data: {
 /**
  * On-Demand: Bestandswarnungen für einen Auftrag berechnen (für das Frontend nutzbar).
  */
+/**
+ * Aggregierte Sicht auf bestellte Artikel mit flexiblen Filtern.
+ * Standard-Gruppierung ist je Artikel (insgesamt). Optional je Artikel+Kunde bzw. Artikel+Kunde+Lieferdatum.
+ * Keine Paginierung, aber Sortierung möglich.
+ */
+export type BestellteArtikelGroupBy = "artikel" | "artikelKunde" | "artikelKundeTag";
+
+export type GetBestellteArtikelParams = {
+  /** optional: log pipeline + timings to server console when env DEBUG_BESTELLTE_ARTIKEL=1 */
+  debug?: boolean;
+  // Filter: Lieferdatum optional – wenn nichts angegeben, wird KEIN Datumsfilter angewendet (alle Daten).
+  lieferdatumVon?: string; // YYYY-MM-DD (Berlin)
+  lieferdatumBis?: string; // YYYY-MM-DD (Berlin)
+
+  // Kunde
+  kundeName?: string;       // contains (i) — wird als Kategorie interpretiert (kunde.kategorie)
+  kundenRegion?: string;    // contains (i) — filtert auf kunde.region
+  kundenNr?: string;        // contains (i) — nutzt Feld Kunde.kundenNummer oder Kunde.kundennummer, falls vorhanden
+
+  // Artikel
+  artikelNr?: string;       // contains (i) — Artikel.artikelNummer
+  artikelName?: string;     // contains (i)
+
+  // Auftrag-Status (optional; wenn leer → alle)
+  statusIn?: Array<"offen" | "in Bearbeitung" | "abgeschlossen" | "storniert">;
+
+  // Gruppierung/Sortierung
+  groupBy?: BestellteArtikelGroupBy; // Default "artikel"
+  sort?:
+    | "mengeDesc" | "mengeAsc"
+    | "preisDesc" | "preisAsc"
+    | "artikelNameAsc" | "artikelNameDesc"
+    | "kundeNameAsc" | "kundeNameDesc"
+    | "lieferdatumAsc" | "lieferdatumDesc";
+};
+
+export type BestellteArtikelAggRow = {
+  artikelId: string;
+  artikelName?: string;
+  artikelNummer?: string;
+  mengeSum: number;
+  einheit?: string;
+};
+
+function berlinDayBoundsISO(from?: string, to?: string): { fromUTC?: Date; toUTC?: Date } {
+  // Wenn nichts gesetzt, KEIN Filter anwenden
+  if (!from && !to) return {};
+  let fromUTC: Date | undefined;
+  let toUTC: Date | undefined;
+  if (from) {
+    const f = DateTime.fromISO(String(from), { zone: ZONE }).startOf("day").toUTC();
+    if (f.isValid) fromUTC = new Date(f.toISO()!);
+  }
+  if (to) {
+    const t = DateTime.fromISO(String(to), { zone: ZONE }).endOf("day").toUTC();
+    if (t.isValid) toUTC = new Date(t.toISO()!);
+  }
+  return { fromUTC, toUTC };
+}
+
+/**
+ * Liefert aggregierte "bestellte Artikel" mit Filtern.
+ * Startpunkt: ArtikelPosition, Lookup Auftrag (für lieferdatum/kunde/status), Lookup Artikel, Lookup Kunde.
+ * Gruppierung nach `groupBy`.
+ */
+export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelParams): Promise<BestellteArtikelAggRow[]> {
+  const groupBy: BestellteArtikelGroupBy = params.groupBy || "artikel";
+  const { fromUTC, toUTC } = berlinDayBoundsISO(params.lieferdatumVon, params.lieferdatumBis);
+
+  if (DEBUG_BESTELLTE || (params as any)?.debug) {
+    console.log("[getBestellteArtikelAggregiert] params:", {
+      ...params,
+      lieferdatumVon: params.lieferdatumVon,
+      lieferdatumBis: params.lieferdatumBis,
+    });
+    console.log("[getBestellteArtikelAggregiert] date-bounds:", { fromUTC, toUTC });
+  }
+
+  // Basispipeline
+  const pipeline: any[] = [
+    // Normalize possible join keys (support both 'auftrag' and 'auftragId')
+    {
+      $addFields: {
+        _joinAuftragId: { $ifNull: ["$auftrag", "$auftragId"] },
+      },
+    },
+    // Join Auftrag (supports two modes):
+    // 1) Direct backref via _joinAuftragId (auftrag/auftragId on ArtikelPosition)
+    // 2) Inverse containment via Auftrag.artikelPosition includes this ArtikelPosition _id
+    {
+      $lookup: {
+        from: Auftrag.collection.name,
+        let: { joinId: "$_joinAuftragId", posId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  { $and: [
+                    { $ne: ["$$joinId", null] },
+                    { $eq: ["$_id", "$$joinId"] }
+                  ]},
+                  { $in: ["$$posId", { $ifNull: ["$artikelPosition", []] }] }
+                ]
+              }
+            }
+          },
+          {
+            $project: { _id: 1, kunde: 1, kundeName: 1, lieferdatum: 1, status: 1 }
+          }
+        ],
+        as: "auftrag",
+      },
+    },
+    { $unwind: { path: "$auftrag", preserveNullAndEmptyArrays: false } },
+    // Lieferdatum-Filter
+    {
+      $match: {
+        ...(fromUTC ? { "auftrag.lieferdatum": { $gte: fromUTC } } : {}),
+        ...(toUTC ? { "auftrag.lieferdatum": { ...(fromUTC ? { $gte: fromUTC } : {}), $lte: toUTC } } : {}),
+      },
+    },
+    // Optional Status-Filter
+    ...(params.statusIn?.length
+      ? [{ $match: { "auftrag.status": { $in: params.statusIn } } }]
+      : []),
+    // Join Artikel
+    {
+      $lookup: {
+        from: ArtikelModel.collection.name,
+        localField: "artikel",
+        foreignField: "_id",
+        as: "artikelDoc",
+      },
+    },
+    { $unwind: { path: "$artikelDoc", preserveNullAndEmptyArrays: true } },
+    // Join Kunde (für kundenNummer etc.)
+    {
+      $lookup: {
+        from: Kunde.collection.name,
+        localField: "auftrag.kunde",
+        foreignField: "_id",
+        as: "kundeDoc",
+      },
+    },
+    { $unwind: { path: "$kundeDoc", preserveNullAndEmptyArrays: true } },
+    // Textfilter Kunde (Kategorie/Region) / Artikel
+    {
+      $match: {
+        ...(params.kundeName
+          ? { "kundeDoc.kategorie": { $regex: params.kundeName, $options: "i" } }
+          : {}),
+        ...(params.kundenRegion
+          ? { "kundeDoc.region": { $regex: params.kundenRegion, $options: "i" } }
+          : {}),
+        ...(params.artikelNr
+          ? { "artikelDoc.artikelNummer": { $regex: params.artikelNr, $options: "i" } }
+          : {}),
+        ...(params.artikelName
+          ? { "artikelDoc.name": { $regex: params.artikelName, $options: "i" } }
+          : {}),
+      },
+    },
+    // Zusätzliche Projektion für spätere Gruppierung
+    {
+      $project: {
+        menge: { $ifNull: ["$menge", 0] },
+        gesamtpreis: { $ifNull: ["$gesamtpreis", 0] },
+        bruttogewicht: { $ifNull: ["$bruttogewicht", "$gesamtgewicht"] },
+        artikelId: "$artikelDoc._id",
+        artikelName: "$artikelDoc.name",
+        artikelNummer: "$artikelDoc.artikelNummer",
+        einheit: "$einheit",
+        kundeId: "$auftrag.kunde",
+        kundeName: { $ifNull: ["$auftrag.kundeName", "$kundeDoc.name"] },
+        kundenNummer: { $ifNull: ["$kundeDoc.kundenNummer", "$kundeDoc.kundennummer"] },
+        lieferdatum: "$auftrag.lieferdatum",
+        _joinAuftragId: "$_joinAuftragId",
+      },
+    },
+  ];
+
+  // --- Deep debug probe: pre-group sample and count ---
+  if (DEBUG_BESTELLTE || (params as any)?.debug) {
+    try {
+      const preGroupCount = await ArtikelPosition.aggregate([...pipeline, { $count: "n" }]);
+      console.log("[getBestellteArtikelAggregiert] pre-group count:", preGroupCount?.[0]?.n ?? 0);
+      const sample = await ArtikelPosition.aggregate([
+        ...pipeline,
+        { $limit: 5 },
+        {
+          $project: {
+            _dbgAuftragId: "$kundeId",
+            _dbgLieferdatum: "$lieferdatum",
+            _dbgArtikelId: "$artikelId",
+            _dbgArtikelName: "$artikelName",
+            _dbgArtikelNummer: "$artikelNummer",
+            _dbgKundeName: "$kundeName",
+            _dbgKundenNummer: "$kundenNummer",
+            menge: 1,
+            einheit: 1,
+            gesamtpreis: 1,
+            _joinAuftragId: "$_joinAuftragId",
+          },
+        },
+      ]);
+      console.log("[getBestellteArtikelAggregiert] pre-group sample (max 5):", sample);
+      if ((preGroupCount?.[0]?.n ?? 0) === 0) {
+        try {
+          const totalPos = await ArtikelPosition.countDocuments({});
+          console.log("[getBestellteArtikelAggregiert] DIAG: artikelpositions.count =", totalPos);
+          const rawSample = await ArtikelPosition.find({}, { _id: 1, auftrag: 1, auftragId: 1, artikel: 1 }).limit(5).lean();
+          console.log("[getBestellteArtikelAggregiert] DIAG: artikelpositions.sample =", rawSample);
+        } catch (e) {
+          console.warn("[getBestellteArtikelAggregiert] DIAG: failed to read base collection:", (e as any)?.message || e);
+        }
+      }
+    } catch (e) {
+      console.warn("[getBestellteArtikelAggregiert] pre-group probe failed:", (e as any)?.message || e);
+    }
+  }
+
+  // Gruppierungs-Schlüssel
+  const groupId: any = { artikelId: "$artikelId" };
+  if (groupBy === "artikelKunde" || groupBy === "artikelKundeTag") {
+    groupId.kundeId = "$kundeId";
+  }
+  if (groupBy === "artikelKundeTag") {
+    groupId.lieferdatum = {
+      $dateToString: { date: "$lieferdatum", format: "%Y-%m-%d", timezone: ZONE },
+    };
+  }
+
+  if (DEBUG_BESTELLTE || (params as any)?.debug) {
+    console.log("[getBestellteArtikelAggregiert] collections:", {
+      artikelPosition: ArtikelPosition.collection.name,
+      auftrag: Auftrag.collection.name,
+      artikel: ArtikelModel.collection.name,
+      kunde: Kunde.collection.name,
+    });
+    try {
+      const preview = JSON.parse(JSON.stringify(pipeline, (_k, v) => {
+        // regex stringify
+        if (v && v.$regex) return { $regex: String(v.$regex), $options: v.$options };
+        return v;
+      }));
+      console.log("[getBestellteArtikelAggregiert] pipeline(pre-group):", preview);
+    } catch {
+      console.log("[getBestellteArtikelAggregiert] pipeline(pre-group): [circular/unstable]");
+    }
+  }
+
+  pipeline.push(
+    {
+      $group: {
+        _id: groupId,
+        artikelName: { $first: "$artikelName" },
+        artikelNummer: { $first: "$artikelNummer" },
+        mengeSum: { $sum: "$menge" },
+        einheit: { $first: "$einheit" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        artikelId: { $toString: "$_id.artikelId" },
+        artikelName: 1,
+        artikelNummer: 1,
+        mengeSum: 1,
+        einheit: 1,
+      },
+    }
+  );
+
+  // Sortierung
+  const sort: any = (() => {
+    switch (params.sort) {
+      case "mengeAsc": return { mengeSum: 1 };
+      case "preisDesc": return { preisSum: -1 };
+      case "preisAsc": return { preisSum: 1 };
+      case "artikelNameDesc": return { artikelName: -1 };
+      case "artikelNameAsc": return { artikelName: 1 };
+      case "kundeNameDesc": return { kundeName: -1 };
+      case "kundeNameAsc": return { kundeName: 1 };
+      case "lieferdatumAsc": return { lieferdatum: 1 };
+      case "lieferdatumDesc": return { lieferdatum: -1 };
+      case "mengeDesc":
+      default:
+        return { mengeSum: -1 };
+    }
+  })();
+
+  pipeline.push({ $sort: sort });
+
+  // Ausführen auf ArtikelPosition-Kollektion mit Timing/Debug
+  let rows: any[] = [];
+  const tLabel = "[getBestellteArtikelAggregiert] aggregate";
+  if (DEBUG_BESTELLTE || (params as any)?.debug) console.time(tLabel);
+  try {
+    rows = await ArtikelPosition.aggregate(pipeline);
+  } catch (err: any) {
+    console.error("[getBestellteArtikelAggregiert] aggregate error:", err?.message || err);
+    try {
+      const preview = JSON.parse(JSON.stringify(pipeline, (_k, v) => {
+        if (v && v.$regex) return { $regex: String(v.$regex), $options: v.$options };
+        return v;
+      }));
+      console.error("[getBestellteArtikelAggregiert] pipeline at error:", preview);
+    } catch {
+      console.error("[getBestellteArtikelAggregiert] pipeline at error: [circular/unstable]");
+    }
+    throw err;
+  } finally {
+    if (DEBUG_BESTELLTE || (params as any)?.debug) console.timeEnd(tLabel);
+  }
+  // Typkonforme Nachbearbeitung: nur gewünschte Felder ausgeben
+  const mapped = rows.map((r: any) => {
+    const out: BestellteArtikelAggRow = {
+      artikelId: r.artikelId,
+      artikelName: r.artikelName,
+      artikelNummer: r.artikelNummer,
+      mengeSum: Number(r.mengeSum || 0),
+      einheit: r.einheit,
+    };
+    return out;
+  });
+  if (DEBUG_BESTELLTE || (params as any)?.debug) {
+    console.log("[getBestellteArtikelAggregiert] result.count =", mapped.length);
+    if (mapped.length > 0) {
+      console.log("[getBestellteArtikelAggregiert] result.sample =", mapped.slice(0, 3));
+    }
+  }
+  return mapped as BestellteArtikelAggRow[];
+}
+
 export async function getBestandsWarnungenForAuftrag(auftragId: string) {
   return computeBestandsWarnungenForAuftrag(auftragId);
 }

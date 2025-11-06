@@ -125,6 +125,7 @@ export async function getAllKunden(
     limit?: number;
     search?: string;
     region?: string;
+    kategorie?: string;
     isApproved?: boolean;
     sortBy?: string;       // z. B. "name" oder "-createdAt"
   },
@@ -144,9 +145,11 @@ export async function getAllKunden(
       { name: { $regex: params.search, $options: "i" } },
       { email: { $regex: params.search, $options: "i" } },
       { kundenNummer: { $regex: params.search, $options: "i" } },
+      { kategorie: { $regex: params.search, $options: "i" } },
     ];
   }
   if (params.region) query.region = params.region;
+  if (params.kategorie) query.kategorie = params.kategorie;
   if (params.isApproved !== undefined) query.isApproved = params.isApproved;
 
   const sort: any = {};

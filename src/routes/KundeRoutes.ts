@@ -111,8 +111,48 @@ kundeRouter.post(
   }
 );
 
+kundeRouter.get(
+  '/',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user as LoginResource;
+
+      const page = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+      const search = req.query.search ? String(req.query.search) : undefined;
+      const region = req.query.region ? String(req.query.region) : undefined;
+      const kategorie = req.query.kategorie ? String(req.query.kategorie) : undefined;
+      let isApproved: boolean | undefined = undefined;
+      if (typeof req.query.isApproved === 'string') {
+        const v = req.query.isApproved.toLowerCase();
+        isApproved = v === 'true' || v === '1' || v === 'yes';
+      } else if (Array.isArray(req.query.isApproved)) {
+        const first = String(req.query.isApproved[0] ?? '').toLowerCase();
+        isApproved = first === 'true' || first === '1' || first === 'yes';
+      }
+      const sortBy = req.query.sortBy ? String(req.query.sortBy) : undefined;
+
+      const params = {
+        page,
+        limit,
+        search,
+        region,
+        kategorie,
+        isApproved,
+        sortBy,
+      };
+
+      const result = await getAllKunden(params, currentUser);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 // GET /kunden
-// Ruft alle Kunden ab – nur Admins (role === "a")
+// Ruft alle Kunden ab – unterstützt Filter (region, kategorie, search, approval, sort) – nur Admins (role === "a")
 kundeRouter.get(
   '/',
   authenticate,
