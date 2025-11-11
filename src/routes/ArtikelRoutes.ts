@@ -10,6 +10,7 @@ import {
   getArtikelByNames,
   getAllArtikelClean,
   getArtikelByIdClean,
+  getArtikelAnalytics,
 } from '../services/ArtikelService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -292,6 +293,41 @@ artikelRouter.get(
       res.json(result);
     } catch (error: any) {
       res.status(404).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * GET /artikel/:id/analytics
+ * Gibt detaillierte Analysen zu einem Artikel in einem definierten Zeitraum zurück.
+ * Query-Parameter:
+ *   from (ISO-String, erforderlich)
+ *   to (ISO-String, erforderlich)
+ *   granularity ('day'|'week'|'month', optional)
+ *   topCustomersLimit (Zahl, optional)
+ *   recentOrdersLimit (Zahl, optional)
+ */
+artikelRouter.get(
+  '/:id/analytics',
+  authenticate,
+  [param('id').isMongoId().withMessage('Ungültige Artikel-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { from, to, granularity, topCustomersLimit, recentOrdersLimit } = req.query;
+      if (!from || !to) {
+        return res.status(400).json({ error: 'Parameter "from" und "to" sind erforderlich' });
+      }
+      const result = await getArtikelAnalytics(req.params.id, {
+        from: String(from),
+        to: String(to),
+        granularity: granularity ? String(granularity) as 'day' | 'week' | 'month' : undefined,
+        topCustomersLimit: topCustomersLimit ? parseInt(String(topCustomersLimit), 10) : undefined,
+        recentOrdersLimit: recentOrdersLimit ? parseInt(String(recentOrdersLimit), 10) : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   }
 );

@@ -10,6 +10,10 @@ import {
   getKundenPreisByArtikelId,
   setAufpreisForArtikelByFilter,
   setAufpreisByGesamtpreis,
+  listKundenpreiseForCustomer,
+  bulkEditKundenpreiseForCustomerByArtikelFilter,
+  listKundenpreiseForArtikel,
+  bulkEditKundenpreiseForArtikelByKundenFilter,
 } from '../services/KundenPreisService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -276,6 +280,142 @@ kundenPreisRouter.delete(
     try {
       await deleteKundenPreis(req.params.id, { role: req.user?.role || [] });
       res.json({ message: 'Kundenpreis gelöscht' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /kundenpreise/customer/:customerId
+// Gibt eine kundenzentrierte Liste aller Artikel mit Aufpreis und Effektivpreis zurück
+kundenPreisRouter.get(
+  '/customer/:customerId',
+  authenticate,
+  isAdmin,
+  [param('customerId').isMongoId().withMessage('Ungültige Kunden-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { customerId } = req.params;
+      const { q, sort, order, page, limit, includeAllArticles } = req.query;
+
+      const result = await listKundenpreiseForCustomer({
+        customerId,
+        q: q as string,
+        sort: sort as any,
+        order: order as any,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 50,
+        includeAllArticles: includeAllArticles === 'true',
+      });
+
+      res.status(200).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /kundenpreise/customer/:customerId/bulk
+// Bulk-Bearbeitung für Kundenpreise (z. B. nach Kategorie, Artikelnummer-Spanne oder Auswahl)
+kundenPreisRouter.post(
+  '/customer/:customerId/bulk',
+  authenticate,
+  isAdmin,
+  [
+    param('customerId').isMongoId().withMessage('Ungültige Kunden-ID'),
+    body('selection').isObject().withMessage('Selection ist erforderlich'),
+    body('action.mode')
+      .isIn(['set', 'add', 'sub'])
+      .withMessage('Ungültiger Modus: erlaubt sind set, add, sub'),
+    body('action.value')
+      .isNumeric()
+      .withMessage('Value muss numerisch sein'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { customerId } = req.params;
+      const { selection, action } = req.body;
+
+      const result = await bulkEditKundenpreiseForCustomerByArtikelFilter(
+        {
+          customerId,
+          selection,
+          action,
+        },
+        { role: req.user?.role || [] }
+      );
+
+      res.status(200).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /kundenpreise/artikel/:artikelId/overview
+// Gibt eine artikelzentrierte Liste aller Kunden mit Aufpreis und Effektivpreis zurück
+kundenPreisRouter.get(
+  '/artikel/:artikelId/overview',
+  authenticate,
+  isAdmin,
+  [param('artikelId').isMongoId().withMessage('Ungültige Artikel-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { artikelId } = req.params;
+      const { q, sort, order, page, limit, includeAllCustomers } = req.query;
+
+      const result = await listKundenpreiseForArtikel({
+        artikelId,
+        q: q as string,
+        sort: sort as any,
+        order: order as any,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 50,
+        includeAllCustomers: includeAllCustomers === 'true',
+      });
+
+      res.status(200).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /kundenpreise/artikel/:artikelId/bulk
+// Bulk-Bearbeitung für einen Artikel basierend auf Kunden-Filtern
+kundenPreisRouter.post(
+  '/artikel/:artikelId/bulk',
+  authenticate,
+  isAdmin,
+  [
+    param('artikelId').isMongoId().withMessage('Ungültige Artikel-ID'),
+    body('selection').isObject().withMessage('Selection ist erforderlich'),
+    body('action.mode')
+      .isIn(['set', 'add', 'sub'])
+      .withMessage('Ungültiger Modus: erlaubt sind set, add, sub'),
+    body('action.value')
+      .isNumeric()
+      .withMessage('Value muss numerisch sein'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { artikelId } = req.params;
+      const { selection, action } = req.body;
+
+      const result = await bulkEditKundenpreiseForArtikelByKundenFilter(
+        {
+          artikelId,
+          selection,
+          action,
+        },
+        { role: req.user?.role || [] }
+      );
+
+      res.status(200).json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
