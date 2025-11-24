@@ -6,6 +6,7 @@ import { KundeResource, LoginResource } from "../Resources"; // Pfad ggf. anpass
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
+import { Types } from "mongoose";
 
 // JWT-Secret, idealerweise über Umgebungsvariablen konfiguriert
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
@@ -39,6 +40,86 @@ function mapKundeToResource(k: any): KundeResource {
     emailSpedition: k.emailSpedition,
     updatedAt: k.updatedAt?.toISOString?.() ?? new Date().toISOString(),
   };
+}
+
+// ==== Analytics Types for Kunde ====
+export type KundeAnalyticsParams = {
+  from?: string; // ISO start (inclusive), if omitted -> no lower bound
+  to?: string;   // ISO end (inclusive), if omitted -> no upper bound
+  granularity?: "day" | "week" | "month";
+  topArticlesLimit?: number;
+  recentOrdersLimit?: number;
+  priceHistogramBuckets?: number;
+};
+
+export type KundeArticleBreakdown = {
+  artikelId: string;
+  artikelName?: string;
+  artikelNummer?: string;
+  menge: number;
+  umsatz: number;
+  avgPreisGewichtet: number | null;
+  minPreis: number | null;
+  maxPreis: number | null;
+  bestellzeilen: number;
+};
+
+export type KundeFulfillmentTotals = {
+  bestelltMenge: number;
+  rausMenge: number;
+  differenz: number;
+  rate: number | null;
+  positionen: number;
+};
+
+export type KundeTimelinePoint = {
+  date: string;
+  menge: number;
+  umsatz: number;
+};
+
+export type KundeFulfillmentTimelinePoint = {
+  date: string;
+  bestelltMenge: number;
+  rausMenge: number;
+  differenz: number;
+};
+
+export type KundeRecentOrder = {
+  auftragId: string;
+  auftragsnummer?: string;
+  lieferdatum?: string;
+  artikelId: string;
+  artikelName?: string;
+  menge: number;
+  einzelpreis: number | null;
+  gesamtpreis: number;
+};
+
+export type KundeAnalytics = {
+  totals: {
+    totalMenge: number;
+    totalUmsatz: number;
+    bestellzeilen: number;
+    artikelCount: number;
+    avgPreisGewichtet: number | null;
+    minPreis: number | null;
+    maxPreis: number | null;
+  };
+  byArtikel: KundeArticleBreakdown[];
+  priceHistogram: Array<{ min: number; max: number; count: number }>;
+  priceExact: Array<{ preis: number; count: number }>;
+  priceExactByDate: Array<{ date: string; preis: number; count: number }>;
+  timeline: KundeTimelinePoint[];
+  fulfillment: KundeFulfillmentTotals;
+  fulfillmentTimeline: KundeFulfillmentTimelinePoint[];
+  recentOrders: KundeRecentOrder[];
+};
+
+function parseDate(input?: string): Date | null {
+  if (!input) return null;
+  const d = new Date(input);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 /**
@@ -469,4 +550,448 @@ export async function normalizeKundenEmails(): Promise<number> {
   }
 
   return count;
+}
+
+/**
+ * Analytics für einen Kunden: Zeitraumbasierte Auswertung der Einkaufsdaten.
+ * - Menge/Umsatz über Zeit (Lieferdatum)
+ * - Top-Artikel (Menge/Umsatz, min/max/avg Preis)
+ * - Preisverteilung (Histogramm + exakte Preise)
+ * - Fulfillment (bestellt Menge vs. raus Nettogewicht) – nur wenn Nettogewicht vorhanden
+ * - Letzte Bestellungen
+ */
+export async function getKundeAnalytics(
+  kundenId: string,
+  params: KundeAnalyticsParams = {}
+): Promise<KundeAnalytics> {
+  // Validate & prepare
+  if (!kundenId) throw new Error("kundenId ist erforderlich");
+  const kundeObj = new Types.ObjectId(kundenId);
+
+  const fromDate = parseDate(params.from || "");
+  const toDate = parseDate(params.to || "");
+  const granularity: "day" | "week" | "month" = params.granularity || "week";
+  const topArticlesLimit = Math.max(1, Math.min(params.topArticlesLimit || 20, 100));
+  const recentOrdersLimit = Math.max(1, Math.min(params.recentOrdersLimit || 50, 200));
+  const priceHistogramBuckets = Math.max(1, Math.min(params.priceHistogramBuckets || 10, 50));
+
+  // Pipeline: Start von ArtikelPosition, dann in Aufträge joinen, die diesen Kunden betreffen
+  const pipeline: any[] = [
+    // Positionen überhaupt
+    { $match: { } },
+    // Join Aufträge, die diese Position enthalten und dem Kunden gehören
+    {
+      $lookup: {
+        from: "auftrags",
+        let: { posId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $in: ["$$posId", "$artikelPosition"] },
+                  { $eq: ["$kunde", kundeObj] }
+                ]
+              }
+            }
+          }
+        ],
+        as: "auftrag"
+      }
+    },
+    { $unwind: "$auftrag" },
+    // Lieferdatum robust gewinnen und casten
+    {
+      $addFields: {
+        lieferdatumRaw: {
+          $ifNull: [
+            "$auftrag.lieferdatum",
+            { $ifNull: ["$auftrag.lieferDatum", "$auftrag.liefer_datum"] }
+          ]
+        }
+      }
+    },
+    {
+      $addFields: {
+        lieferdatum: {
+          $convert: { input: "$lieferdatumRaw", to: "date", onError: null, onNull: null }
+        }
+      }
+    },
+    // Datumsfilter, falls gesetzt
+    ...(fromDate || toDate
+      ? [{
+          $match: {
+            lieferdatum: {
+              ...(fromDate ? { $gte: fromDate } : {}),
+              ...(toDate ? { $lte: toDate } : {}),
+            }
+          }
+        }]
+      : []),
+    // Artikel-Infos anreichern
+    {
+      $lookup: {
+        from: "artikels",
+        localField: "artikel",
+        foreignField: "_id",
+        as: "artikelDoc"
+      }
+    },
+    { $unwind: { path: "$artikelDoc", preserveNullAndEmptyArrays: true } },
+    // Casting & abgeleitete Felder
+    {
+      $addFields: {
+        _menge: { $convert: { input: "$menge", to: "double", onError: 0, onNull: 0 } },
+        _einzelpreisValid: { $convert: { input: "$einzelpreis", to: "double", onError: null, onNull: null } },
+        _nettogewichtValid: { $convert: { input: "$nettogewicht", to: "double", onError: null, onNull: null } },
+      }
+    },
+    {
+      $addFields: {
+        gesamtpreisCalc: {
+          $cond: [
+            { $ne: ["$_einzelpreisValid", null] },
+            { $multiply: ["$_menge", "$_einzelpreisValid"] },
+            0
+          ]
+        }
+      }
+    },
+    // Nur sinnvolle Datensätze für spätere Berechnungen
+    {
+      $project: {
+        artikel: 1,
+        artikelName: { $ifNull: ["$artikelName", "$artikelDoc.name"] },
+        artikelNummer: { $ifNull: ["$artikelNummer", "$artikelDoc.artikelNummer"] },
+        menge: "$_menge",
+        einzelpreis: "$_einzelpreisValid",
+        gesamtpreis: { $ifNull: ["$gesamtpreis", "$gesamtpreisCalc"] },
+        nettogewicht: "$_nettogewichtValid",
+        lieferdatum: 1,
+        auftragId: "$auftrag._id",
+        auftragsnummer: "$auftrag.auftragsnummer"
+      }
+    },
+    // Ab hier werden die Facets erzeugt
+    {
+      $facet: {
+        totals: [
+          {
+            $group: {
+              _id: null,
+              totalMenge: { $sum: "$menge" },
+              totalUmsatz: { $sum: "$gesamtpreis" },
+              bestellzeilen: { $sum: 1 },
+              artikelSet: { $addToSet: "$artikel" },
+              sumPreisMalMenge: {
+                $sum: {
+                  $cond: [
+                    { $ne: ["$einzelpreis", null] },
+                    { $multiply: ["$menge", "$einzelpreis"] },
+                    0
+                  ]
+                }
+              },
+              sumMengeMitPreis: {
+                $sum: {
+                  $cond: [
+                    { $ne: ["$einzelpreis", null] },
+                    "$menge",
+                    0
+                  ]
+                }
+              },
+              minPreis: { $min: "$einzelpreis" },
+              maxPreis: { $max: "$einzelpreis" }
+            }
+          },
+          {
+            $project: {
+              _id: 0,
+              totalMenge: 1,
+              totalUmsatz: 1,
+              bestellzeilen: 1,
+              artikelCount: { $size: "$artikelSet" },
+              avgPreisGewichtet: {
+                $cond: [
+                  { $gt: ["$sumMengeMitPreis", 0] },
+                  { $divide: ["$sumPreisMalMenge", "$sumMengeMitPreis"] },
+                  null
+                ]
+              },
+              minPreis: 1,
+              maxPreis: 1
+            }
+          }
+        ],
+        byArtikel: [
+          {
+            $group: {
+              _id: "$artikel",
+              artikelName: { $first: "$artikelName" },
+              artikelNummer: { $first: "$artikelNummer" },
+              menge: { $sum: "$menge" },
+              umsatz: { $sum: "$gesamtpreis" },
+              bestellzeilen: { $sum: 1 },
+              sumPreisMalMenge: {
+                $sum: {
+                  $cond: [
+                    { $ne: ["$einzelpreis", null] },
+                    { $multiply: ["$menge", "$einzelpreis"] },
+                    0
+                  ]
+                }
+              },
+              sumMengeMitPreis: {
+                $sum: {
+                  $cond: [
+                    { $ne: ["$einzelpreis", null] },
+                    "$menge",
+                    0
+                  ]
+                }
+              },
+              minPreis: { $min: "$einzelpreis" },
+              maxPreis: { $max: "$einzelpreis" }
+            }
+          },
+          {
+            $project: {
+              _id: 0,
+              artikelId: { $toString: "$_id" },
+              artikelName: 1,
+              artikelNummer: 1,
+              menge: 1,
+              umsatz: 1,
+              avgPreisGewichtet: {
+                $cond: [
+                  { $gt: ["$sumMengeMitPreis", 0] },
+                  { $divide: ["$sumPreisMalMenge", "$sumMengeMitPreis"] },
+                  null
+                ]
+              },
+              minPreis: 1,
+              maxPreis: 1,
+              bestellzeilen: 1
+            }
+          },
+          { $sort: { menge: -1, umsatz: -1 } },
+          { $limit: topArticlesLimit }
+        ],
+        priceHistogram: [
+          { $match: { einzelpreis: { $ne: null } } },
+          {
+            $bucketAuto: {
+              groupBy: "$einzelpreis",
+              buckets: priceHistogramBuckets,
+              output: { count: { $sum: 1 } }
+            }
+          }
+        ],
+        priceExact: [
+          { $match: { einzelpreis: { $ne: null } } },
+          {
+            $group: {
+              _id: { $round: ["$einzelpreis", 4] },
+              count: { $sum: 1 }
+            }
+          },
+          { $sort: { _id: 1 } },
+          { $project: { _id: 0, preis: { $convert: { input: "$_id", to: "double", onError: null, onNull: null } }, count: 1 } }
+        ],
+        priceExactByDate: [
+          { $match: { einzelpreis: { $ne: null }, lieferdatum: { $ne: null } } },
+          {
+            $group: {
+              _id: {
+                price: { $round: ["$einzelpreis", 4] },
+                d: {
+                  $dateTrunc: { date: "$lieferdatum", unit: granularity, startOfWeek: "Monday" }
+                }
+              },
+              count: { $sum: 1 }
+            }
+          },
+          { $sort: { "_id.d": 1, "_id.price": 1 } },
+          {
+            $project: {
+              _id: 0,
+              date: "$_id.d",
+              preis: { $convert: { input: "$_id.price", to: "double", onError: null, onNull: null } },
+              count: 1
+            }
+          }
+        ],
+        timeline: [
+          { $match: { lieferdatum: { $ne: null } } },
+          {
+            $group: {
+              _id: {
+                $dateTrunc: { date: "$lieferdatum", unit: granularity, startOfWeek: "Monday" }
+              },
+              menge: { $sum: "$menge" },
+              umsatz: { $sum: "$gesamtpreis" }
+            }
+          },
+          { $sort: { _id: 1 } },
+          { $project: { _id: 0, date: "$_id", menge: 1, umsatz: 1 } }
+        ],
+        fulfillmentTotals: [
+          { $match: { nettogewicht: { $ne: null } } },
+          {
+            $group: {
+              _id: null,
+              bestelltMenge: { $sum: "$menge" },
+              rausMenge: { $sum: "$nettogewicht" },
+              positionen: { $sum: 1 }
+            }
+          },
+          {
+            $project: {
+              _id: 0,
+              bestelltMenge: 1,
+              rausMenge: 1,
+              differenz: { $subtract: ["$rausMenge", "$bestelltMenge"] },
+              rate: {
+                $cond: [{ $gt: ["$bestelltMenge", 0] }, { $divide: ["$rausMenge", "$bestelltMenge"] }, null]
+              },
+              positionen: 1
+            }
+          }
+        ],
+        fulfillmentTimeline: [
+          { $match: { nettogewicht: { $ne: null }, lieferdatum: { $ne: null } } },
+          {
+            $group: {
+              _id: {
+                $dateTrunc: { date: "$lieferdatum", unit: granularity, startOfWeek: "Monday" }
+              },
+              bestelltMenge: { $sum: "$menge" },
+              rausMenge: { $sum: "$nettogewicht" }
+            }
+          },
+          { $sort: { _id: 1 } },
+          {
+            $project: {
+              _id: 0,
+              date: "$_id",
+              bestelltMenge: 1,
+              rausMenge: 1,
+              differenz: { $subtract: ["$rausMenge", "$bestelltMenge"] }
+            }
+          }
+        ],
+        recentOrders: [
+          { $sort: { lieferdatum: -1, _id: -1 } },
+          { $limit: recentOrdersLimit },
+          {
+            $project: {
+              _id: 0,
+              auftragId: { $toString: "$auftragId" },
+              auftragsnummer: 1,
+              lieferdatum: 1,
+              artikelId: { $toString: "$artikel" },
+              artikelName: 1,
+              menge: 1,
+              einzelpreis: 1,
+              gesamtpreis: 1
+            }
+          }
+        ]
+      }
+    }
+  ];
+
+  const agg = await ArtikelPosition.aggregate(pipeline);
+  const first = agg[0] || {};
+
+  // Normalize priceHistogram buckets (support $bucketAuto shape)
+  const rawBuckets = Array.isArray(first.priceHistogram) ? first.priceHistogram : [];
+  const priceHistogram = rawBuckets.map((b: any) => ({
+    min: (b && b._id && typeof b._id.min !== "undefined") ? b._id.min : (typeof b.min !== "undefined" ? b.min : null),
+    max: (b && b._id && typeof b._id.max !== "undefined") ? b._id.max : (typeof b.max !== "undefined" ? b.max : null),
+    count: typeof b.count === "number" ? b.count : 0
+  }));
+
+  const totalsRaw = Array.isArray(first.totals) && first.totals[0] ? first.totals[0] : null;
+  const totals = totalsRaw ? {
+    totalMenge: Number(totalsRaw.totalMenge ?? 0),
+    totalUmsatz: Number(totalsRaw.totalUmsatz ?? 0),
+    bestellzeilen: Number(totalsRaw.bestellzeilen ?? 0),
+    artikelCount: Number(totalsRaw.artikelCount ?? 0),
+    avgPreisGewichtet: totalsRaw.avgPreisGewichtet != null ? Number(totalsRaw.avgPreisGewichtet) : null,
+    minPreis: totalsRaw.minPreis != null ? Number(totalsRaw.minPreis) : null,
+    maxPreis: totalsRaw.maxPreis != null ? Number(totalsRaw.maxPreis) : null
+  } : {
+    totalMenge: 0, totalUmsatz: 0, bestellzeilen: 0, artikelCount: 0, avgPreisGewichtet: null, minPreis: null, maxPreis: null
+  };
+
+  const byArtikel = Array.isArray(first.byArtikel) ? first.byArtikel.map((r: any) => ({
+    artikelId: r.artikelId,
+    artikelName: r.artikelName,
+    artikelNummer: r.artikelNummer,
+    menge: Number(r.menge ?? 0),
+    umsatz: Number(r.umsatz ?? 0),
+    avgPreisGewichtet: r.avgPreisGewichtet != null ? Number(r.avgPreisGewichtet) : null,
+    minPreis: r.minPreis != null ? Number(r.minPreis) : null,
+    maxPreis: r.maxPreis != null ? Number(r.maxPreis) : null,
+    bestellzeilen: Number(r.bestellzeilen ?? 0)
+  })) : [];
+
+  const priceExact = Array.isArray(first.priceExact) ? first.priceExact.map((p: any) => ({
+    preis: Number(p.preis ?? 0),
+    count: Number(p.count ?? 0)
+  })) : [];
+
+  const priceExactByDate = Array.isArray(first.priceExactByDate) ? first.priceExactByDate.map((r: any) => ({
+    date: new Date(r.date).toISOString(),
+    preis: Number(r.preis ?? 0),
+    count: Number(r.count ?? 0)
+  })) : [];
+
+  const timeline = Array.isArray(first.timeline) ? first.timeline.map((t: any) => ({
+    date: new Date(t.date).toISOString(),
+    menge: Number(t.menge ?? 0),
+    umsatz: Number(t.umsatz ?? 0)
+  })) : [];
+
+  const fulfillmentTotals = Array.isArray(first.fulfillmentTotals) && first.fulfillmentTotals[0] ? first.fulfillmentTotals[0] : null;
+  const fulfillment: KundeFulfillmentTotals = fulfillmentTotals ? {
+    bestelltMenge: Number(fulfillmentTotals.bestelltMenge ?? 0),
+    rausMenge: Number(fulfillmentTotals.rausMenge ?? 0),
+    differenz: Number(fulfillmentTotals.differenz ?? 0),
+    rate: fulfillmentTotals.rate != null ? Number(fulfillmentTotals.rate) : null,
+    positionen: Number(fulfillmentTotals.positionen ?? 0)
+  } : { bestelltMenge: 0, rausMenge: 0, differenz: 0, rate: null, positionen: 0 };
+
+  const fulfillmentTimeline = Array.isArray(first.fulfillmentTimeline) ? first.fulfillmentTimeline.map((r: any) => ({
+    date: new Date(r.date).toISOString(),
+    bestelltMenge: Number(r.bestelltMenge ?? 0),
+    rausMenge: Number(r.rausMenge ?? 0),
+    differenz: Number(r.differenz ?? 0)
+  })) : [];
+
+  const recentOrders = Array.isArray(first.recentOrders) ? first.recentOrders.map((o: any) => ({
+    auftragId: o.auftragId,
+    auftragsnummer: o.auftragsnummer,
+    lieferdatum: o.lieferdatum ? new Date(o.lieferdatum).toISOString() : undefined,
+    artikelId: o.artikelId,
+    artikelName: o.artikelName,
+    menge: Number(o.menge ?? 0),
+    einzelpreis: o.einzelpreis != null ? Number(o.einzelpreis) : null,
+    gesamtpreis: Number(o.gesamtpreis ?? 0)
+  })) : [];
+
+  return {
+    totals,
+    byArtikel,
+    priceHistogram,
+    priceExact,
+    priceExactByDate,
+    timeline,
+    fulfillment,
+    fulfillmentTimeline,
+    recentOrders
+  };
 }

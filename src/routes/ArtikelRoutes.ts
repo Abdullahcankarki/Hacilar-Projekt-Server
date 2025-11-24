@@ -235,6 +235,8 @@ artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => 
     const ausverkauft = parseBool(req.query.ausverkauft);
     const name = typeof req.query.name === 'string' ? req.query.name : undefined;
     const erfassungsModus = parseList(req.query.erfassungsModus);
+    const sortBy = typeof req.query.sortBy === 'string' ? req.query.sortBy as any : undefined;
+    const sortDir = typeof req.query.sortDir === 'string' ? req.query.sortDir as any : undefined;
 
     const result = await getAllArtikel(kundeId, {
       page,
@@ -243,6 +245,8 @@ artikelRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => 
       ausverkauft,
       name,
       erfassungsModus: erfassungsModus as any,
+      sortBy,
+      sortDir,
     });
     res.json(result);
   } catch (error: any) {
@@ -263,6 +267,8 @@ artikelRouter.get('/clean', authenticate, async (req: AuthRequest, res: Response
     const ausverkauft = parseBool(req.query.ausverkauft);
     const name = typeof req.query.name === 'string' ? req.query.name : undefined;
     const erfassungsModus = parseList(req.query.erfassungsModus);
+    const sortBy = typeof req.query.sortBy === 'string' ? (req.query.sortBy as any) : undefined;
+    const sortDir = typeof req.query.sortDir === 'string' ? (req.query.sortDir as any) : undefined;
 
     const result = await getAllArtikelClean({
       page,
@@ -271,6 +277,8 @@ artikelRouter.get('/clean', authenticate, async (req: AuthRequest, res: Response
       ausverkauft,
       name,
       erfassungsModus: erfassungsModus as any,
+      sortBy,
+      sortDir,
     });
     res.json(result);
   } catch (error: any) {

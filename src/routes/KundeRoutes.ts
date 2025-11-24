@@ -15,6 +15,7 @@ import {
   getUnapprovedKunden,
   normalizeKundenEmails,
   approveKunde,
+  getKundeAnalytics,
 } from '../services/KundeService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -151,45 +152,41 @@ kundeRouter.get(
   }
 );
 
-// GET /kunden
-// Ruft alle Kunden ab – unterstützt Filter (region, kategorie, search, approval, sort) – nur Admins (role === "a")
-kundeRouter.get(
-  '/',
-  authenticate,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const currentUser = req.user as LoginResource;
 
-      const page = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
-      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
-      const search = req.query.search ? String(req.query.search) : undefined;
-      const region = req.query.region ? String(req.query.region) : undefined;
-      let isApproved: boolean | undefined = undefined;
-      if (typeof req.query.isApproved === 'string') {
-        const v = req.query.isApproved.toLowerCase();
-        isApproved = v === 'true' || v === '1' || v === 'yes';
-      } else if (Array.isArray(req.query.isApproved)) {
-        const first = String(req.query.isApproved[0] ?? '').toLowerCase();
-        isApproved = first === 'true' || first === '1' || first === 'yes';
-      }
-      const sortBy = req.query.sortBy ? String(req.query.sortBy) : undefined;
+/**
+ * GET /api/kunden/:id/analytics
+ * Query:
+ *  - from, to (ISO)
+ *  - granularity: 'day' | 'week' | 'month'
+ *  - topArticlesLimit, recentOrdersLimit, priceHistogramBuckets (Zahlen)
+ */
+kundeRouter.get('/:id/analytics', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      from,
+      to,
+      granularity,
+      topArticlesLimit,
+      recentOrdersLimit,
+      priceHistogramBuckets,
+    } = req.query as Record<string, string | undefined>;
 
-      const params = {
-        page,
-        limit,
-        search,
-        region,
-        isApproved,
-        sortBy,
-      };
+    const data = await getKundeAnalytics(id, {
+      from,
+      to,
+      granularity: (granularity as any) ?? 'week',
+      topArticlesLimit: topArticlesLimit ? Number(topArticlesLimit) : undefined,
+      recentOrdersLimit: recentOrdersLimit ? Number(recentOrdersLimit) : undefined,
+      priceHistogramBuckets: priceHistogramBuckets ? Number(priceHistogramBuckets) : undefined,
+    });
 
-      const result = await getAllKunden(params, currentUser);
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.json(data);
+  } catch (err: any) {
+    console.error('[KundeAnalytics] error', err);
+    res.status(400).json({ error: err?.message ?? 'Unbekannter Fehler' });
   }
-);
+});
 
 // GET /kunden
 // Ruft alle Kunden ab – nur Admins (role === "a")

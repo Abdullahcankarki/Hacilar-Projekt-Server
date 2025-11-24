@@ -22,6 +22,7 @@ import historieRouter from './routes/inventory/HistorieRoutes';
 import muellRouter from './routes/inventory/MuellRoutes';
 import reservierungenRouter from './routes/inventory/ReservierungsRoutes';
 import warnungenRouter from './routes/inventory/WarnungenRoutes';
+import statsRouter from './routes/StatsRoutes';
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use("/api/historie", historieRouter);
 app.use("/api/muell", muellRouter);
 app.use("/api/reservierungen", reservierungenRouter);
 app.use("/api/warnungen", warnungenRouter);
+app.use("/api/stats", statsRouter);
 
 
 export default app;

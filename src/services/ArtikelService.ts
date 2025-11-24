@@ -146,6 +146,8 @@ export async function getAllArtikel(
     ausverkauft?: boolean;
     name?: string; // substring filter (case-insensitive)
     erfassungsModus?: string | string[];
+    sortBy?: "name" | "preis" | "kategorie" | "artikelNummer";
+    sortDir?: "asc" | "desc";
   }
 ): Promise<{
   items: ArtikelResource[];
@@ -158,10 +160,17 @@ export async function getAllArtikel(
 
   // Build filter
   const query: any = {};
+  query.kategorie = { $ne: "Leergut" };
   if (options?.kategorie) {
-    query.kategorie = Array.isArray(options.kategorie)
-      ? { $in: options.kategorie }
-      : options.kategorie;
+    if (Array.isArray(options.kategorie)) {
+      query.kategorie = { $in: options.kategorie };
+    } else {
+      // Teilstring-Suche (case-insensitive) für Kategorie
+      const escapedKat = options.kategorie
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      query.kategorie = { $regex: escapedKat, $options: "i" };
+    }
   }
   if (typeof options?.ausverkauft === "boolean") {
     query.ausverkauft = options.ausverkauft;
@@ -188,8 +197,24 @@ export async function getAllArtikel(
   const pages = Math.max(1, Math.ceil(total / limit));
   const skip = (page - 1) * limit;
 
+  // Sortierung (Standard: nach Name aufsteigend)
+  let sort: any = { name: 1 };
+  if (options?.sortBy) {
+    const dir = options.sortDir === "desc" ? -1 : 1;
+    const field =
+      options.sortBy === "artikelNummer"
+        ? "artikelNummer"
+        : options.sortBy === "preis"
+        ? "preis"
+        : options.sortBy === "kategorie"
+        ? "kategorie"
+        : "name";
+    sort = { [field]: dir };
+  }
+
   const artikelList = await ArtikelModel.find(query)
     .collation({ locale: "de", strength: 2 })
+    .sort(sort)
     .skip(skip)
     .limit(limit)
     .lean();
@@ -243,6 +268,8 @@ export async function getAllArtikelClean(options?: {
   ausverkauft?: boolean;
   name?: string; // substring filter (case-insensitive)
   erfassungsModus?: string | string[];
+  sortBy?: "name" | "preis" | "kategorie" | "artikelNummer";
+  sortDir?: "asc" | "desc";
 }): Promise<{
   items: ArtikelResource[];
   page: number;
@@ -260,9 +287,14 @@ export async function getAllArtikelClean(options?: {
 
   const query: any = {};
   if (options?.kategorie) {
-    query.kategorie = Array.isArray(options.kategorie)
-      ? { $in: options.kategorie }
-      : options.kategorie;
+    if (Array.isArray(options.kategorie)) {
+      query.kategorie = { $in: options.kategorie };
+    } else {
+      const escapedKat = options.kategorie
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      query.kategorie = { $regex: escapedKat, $options: "i" };
+    }
   }
   if (typeof options?.ausverkauft === "boolean") {
     query.ausverkauft = options.ausverkauft;
@@ -284,8 +316,24 @@ export async function getAllArtikelClean(options?: {
   const pages = Math.max(1, Math.ceil(total / limit));
   const skip = (page - 1) * limit;
 
+  // Sortierung (Standard: nach Name aufsteigend)
+  let sort: any = { name: 1 };
+  if (options?.sortBy) {
+    const dir = options.sortDir === "desc" ? -1 : 1;
+    const field =
+      options.sortBy === "artikelNummer"
+        ? "artikelNummer"
+        : options.sortBy === "preis"
+        ? "preis"
+        : options.sortBy === "kategorie"
+        ? "kategorie"
+        : "name";
+    sort = { [field]: dir };
+  }
+
   const artikelList = await ArtikelModel.find(query)
     .collation({ locale: "de", strength: 2 })
+    .sort(sort)
     .skip(skip)
     .limit(limit)
     .lean();
