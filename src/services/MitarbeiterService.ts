@@ -2,6 +2,7 @@ import { Mitarbeiter } from '../model/MitarbeiterModel'; // Pfad ggf. anpassen
 import { MitarbeiterResource, LoginResource, MitarbeiterRolle } from '../Resources'; // Pfad ggf. anpassen
 import bcrypt from 'bcryptjs';
 import jwt from "jsonwebtoken"
+import {AuthError} from "../routes/CustomErrors"
 
 // Ersetzt deine aktuelle JWT_SECRET-Deklaration
 const JWT_SECRET: string = (() => {
@@ -141,22 +142,27 @@ export async function loginMitarbeiter(
   credentials: { name: string; password: string }
 ): Promise<{ token: string; user: LoginResource }> {
   const { name, password } = credentials;
+
   if (!name || !password) {
-    throw new Error("Name und Passwort sind erforderlich");
+    throw new AuthError("MISSING_FIELDS", "Name und Passwort sind erforderlich", 400);
   }
+
   const user = await Mitarbeiter.findOne({ name: name.toLowerCase() });
   if (!user) {
-    throw new Error("Ungültige Anmeldedaten");
+    throw new AuthError("INVALID_NAME", "Diesen Mitarbeiter gibt es nicht.", 401);
   }
+
   const passwordValid = await bcrypt.compare(password, user.password);
   if (!passwordValid) {
-    throw new Error("Ungültige Anmeldedaten");
+    throw new AuthError("INVALID_PASSWORD", "Passwort ist falsch.", 401);
   }
+
   const payload: LoginResource = {
     id: user._id.toString(),
     role: user.rollen as MitarbeiterRolle[],
     exp: Math.floor(Date.now() / 1000) + JWT_EXPIRES_SECONDS,
   };
+
   const token = jwt.sign(payload, JWT_SECRET);
   return { token, user: payload };
 }

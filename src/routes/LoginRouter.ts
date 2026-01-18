@@ -361,33 +361,18 @@ loginRouter.post(
     } catch (error: any) {
       console.error("LOGIN ERROR:", error);
 
-      const msg = error.message?.toLowerCase() || "";
-
-      if (msg.includes("passwort")) {
-        return res.status(401).json({
-          code: "AUTH_FAILED",
-          message: "Das Passwort ist nicht korrekt.",
+      // Custom error handling
+      if (error.code) {
+        return res.status(error.status || 400).json({
+          code: error.code,
+          message: error.message
         });
       }
 
-      if (msg.includes("nicht gefunden")) {
-        return res.status(401).json({
-          code: "USER_NOT_FOUND",
-          message: "Benutzer nicht gefunden.",
-        });
-      }
-
-      if (msg.includes("ungültige anmeldedaten")) {
-        return res.status(401).json({
-          code: "INVALID_CREDENTIALS",
-          message: "Benutzername oder Passwort ist falsch.",
-        });
-      }
-
+      // Fallback for unknown errors
       return res.status(500).json({
         code: "INTERNAL_ERROR",
-        message:
-          "Ein unerwarteter Fehler ist aufgetreten. Bitte versuche es erneut.",
+        message: "Ein unerwarteter Fehler ist aufgetreten. Bitte versuche es erneut."
       });
     }
   }

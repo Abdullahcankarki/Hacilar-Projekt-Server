@@ -9,6 +9,7 @@ import {
   deleteArtikelPosition,
   deleteAllArtikelPosition,
   updateArtikelPositionKommissionierung,
+  updateLeergut,
 } from "../services/ArtikelPositionService"; // Pfad ggf. anpassen
 import { LoginResource } from "../Resources"; // Pfad ggf. anpassen
 import { ArtikelPosition } from "../model/ArtikelPositionModel";
@@ -302,6 +303,46 @@ artikelPositionRouter.put(
   }
 );
 
+/**
+ * PUT /artikelposition/:id/leergut
+ * Aktualisiert Leergut (Art, Anzahl, Gewicht) einer Artikelposition
+ */
+artikelPositionRouter.put(
+  "/:id/leergut",
+  authenticate,
+  [
+    param("id").isMongoId().withMessage("Ungültige ArtikelPosition-ID"),
+    body("leergut")
+      .isArray()
+      .withMessage("Leergut muss ein Array sein"),
+
+    body("leergut.*.leergutArt")
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage("Leergutart ist erforderlich"),
+
+    body("leergut.*.leergutAnzahl")
+      .isNumeric()
+      .withMessage("Leergutanzahl muss eine Zahl sein"),
+
+    body("leergut.*.leergutGewicht")
+      .isNumeric()
+      .withMessage("Leergutgewicht muss eine Zahl sein"),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await updateLeergut(
+        req.params.id,
+        req.body.leergut
+      );
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 /**
  * DELETE /artikelposition/all

@@ -30,8 +30,6 @@ function toISODate(d?: Date | string | null): string | undefined {
   return isNaN(dt.getTime()) ? undefined : dt.toISOString();
 }
 
-function round3(n: number): number { return Math.round(n * 1000) / 1000; }
-
 async function getArtikelGewichte(artikelId: string) {
   const a = await ArtikelModel.findById(artikelId).lean();
   return {
@@ -43,9 +41,20 @@ async function getArtikelGewichte(artikelId: string) {
   };
 }
 
-async function sumBereitsGebuchtKg(auftragId: string, artikelId: string, positionId: string): Promise<number> {
+async function sumBereitsGebuchtKg(
+  auftragId: string,
+  artikelId: string,
+  positionId: string
+): Promise<number> {
   const docs = await BewegungModel.aggregate([
-    { $match: { typ: "KOMMISSIONIERUNG", auftragId: new mongoose.Types.ObjectId(auftragId), artikelId: new mongoose.Types.ObjectId(artikelId), notiz: { $regex: `\\[POS:${positionId}\\]` } } },
+    {
+      $match: {
+        typ: "KOMMISSIONIERUNG",
+        auftragId: new mongoose.Types.ObjectId(auftragId),
+        artikelId: new mongoose.Types.ObjectId(artikelId),
+        notiz: { $regex: `\\[POS:${positionId}\\]` },
+      },
+    },
     { $group: { _id: null, sum: { $sum: "$menge" } } },
   ]);
   // menge ist negativ bei KOMMISSIONIERUNG → wir nehmen den Absolutwert
@@ -54,18 +63,176 @@ async function sumBereitsGebuchtKg(auftragId: string, artikelId: string, positio
 }
 
 async function upsertBestandAgg(
-  p: { artikelId: string; chargeId: string; lagerbereich: Lagerbereich; deltaVerfuegbar: number },
+  p: {
+    artikelId: string;
+    chargeId: string;
+    lagerbereich: Lagerbereich;
+    deltaVerfuegbar: number;
+  },
   session: mongoose.ClientSession
 ) {
   await BestandAggModel.updateOne(
-    { artikelId: new mongoose.Types.ObjectId(p.artikelId), chargeId: new mongoose.Types.ObjectId(p.chargeId), lagerbereich: p.lagerbereich },
     {
-      $setOnInsert: { artikelId: new mongoose.Types.ObjectId(p.artikelId), chargeId: new mongoose.Types.ObjectId(p.chargeId), lagerbereich: p.lagerbereich },
+      artikelId: new mongoose.Types.ObjectId(p.artikelId),
+      chargeId: new mongoose.Types.ObjectId(p.chargeId),
+      lagerbereich: p.lagerbereich,
+    },
+    {
+      $setOnInsert: {
+        artikelId: new mongoose.Types.ObjectId(p.artikelId),
+        chargeId: new mongoose.Types.ObjectId(p.chargeId),
+        lagerbereich: p.lagerbereich,
+      },
       $inc: { verfuegbar: p.deltaVerfuegbar },
       $set: { updatedAt: new Date() },
     },
     { upsert: true, session }
   );
+}
+
+// ---------- Leergut→Artikel-Mapping ----------
+
+const LEERGUT_OPTION_TO_ARTIKELNAME: Record<string, string> = {
+  e2: "E2 Kiste",
+  e1: "E1 Kiste",
+  h1: "H1 Palette",
+  karton: "Karton",
+  // "e6": "E6 Kiste", // nur aktivieren, wenn Artikel existiert
+  "big box": "Big Box",
+  korb: "Korb",
+  "euro palette": "Euro Palette",
+  einwegpalette: "Einwegplatte", // dein Artikel heißt so
+  haken: "Euro Haken",
+  // "tüten": "Tüte", // nur wenn du einen Artikel dafür hast
+};
+
+// Helper to reorder artikelPositionen in Auftrag after Leergut changes
+async function reorderArtikelPositionen(auftragId: string) {
+  const auftrag = await Auftrag.findById(auftragId);
+  if (!auftrag) return;
+
+
+  const allePositionen = await ArtikelPosition.find({ auftragId }).lean();
+  const leergut = allePositionen.filter(p => p.leergutVonPositionId);
+
+  // Ensure the Auftrag list never contains Leergut IDs
+  auftrag.artikelPosition = auftrag.artikelPosition.filter(id =>
+    allePositionen.some(p => p._id.toString() === id.toString() && !p.leergutVonPositionId)
+  );
+
+  const newOrder: any[] = [];
+
+  // WICHTIG: Reihenfolge der Hauptpositionen kommt vom Auftrag selbst
+  for (const id of auftrag.artikelPosition) {
+    const haupt = allePositionen.find(
+      p => p._id.toString() === id.toString() && !p.leergutVonPositionId
+    );
+    if (!haupt) continue;
+
+    // passende Leergutpositionen voranstellen
+    const zugehoerig = leergut.filter(
+      l => l.leergutVonPositionId?.toString() === haupt._id.toString()
+    );
+
+    zugehoerig.sort((a, b) => a.artikelName.localeCompare(b.artikelName));
+
+    for (const lg of zugehoerig) newOrder.push(lg._id);
+
+    newOrder.push(haupt._id);
+  }
+
+  // Remove duplicate IDs
+  const unique = Array.from(new Set(newOrder.map(id => id.toString())))
+    .map(id => new mongoose.Types.ObjectId(id));
+  auftrag.artikelPosition = unique;
+  await Auftrag.findByIdAndUpdate(
+    auftragId,
+    { artikelPosition: unique },
+    { new: true }
+  );
+}
+
+/**
+ * Erzeugt zu einem Leergut-Eintrag eine Leergut-Artikelposition
+ * auf dem angegebenen Auftrag (falls Mapping + Artikel gefunden).
+ */
+async function createLeergutArtikelPositionFromSelection(
+  auftragId: string | undefined,
+  positionId: any,
+  leergutArtRaw: string,
+  anzahl: number
+): Promise<void> {
+
+  if (!auftragId) return;
+  if (!anzahl || anzahl <= 0) return;
+
+  // Normalize auftragId as ObjectId once
+  const auftragObjectId = new mongoose.Types.ObjectId(auftragId);
+  // Normalize positionId as ObjectId once
+  const posId = new mongoose.Types.ObjectId(positionId.toString());
+
+  const key = leergutArtRaw.trim().toLowerCase();
+  const artikelName = LEERGUT_OPTION_TO_ARTIKELNAME[key];
+  if (!artikelName) {
+    return;
+  }
+
+  const artikel = await ArtikelModel.findOne({
+    name: artikelName,
+    kategorie: "Leergut",
+  });
+
+  if (!artikel) {
+    return;
+  }
+
+
+  // ❗ Anti-Duplicate Guard: if Leergut already exists with same values, exit early
+  const existingStrict = await ArtikelPosition.findOne({
+    auftragId: auftragObjectId,
+    artikel: artikel?._id,
+    leergutVonPositionId: posId
+  }).lean();
+
+
+  if (existingStrict && existingStrict.menge === anzahl) {
+    // Already correct → do not recreate or update
+    return;
+  }
+
+
+  // Upsert statt immer neu erstellen
+  const existing = await ArtikelPosition.findOne({
+    auftragId: auftragObjectId,
+    artikel: artikel._id,
+    leergutVonPositionId: posId,
+  });
+
+
+  if (existing) {
+    if (existing.menge === anzahl) {
+        // No changes → avoid re-triggering reorder or duplicate work
+        await reorderArtikelPositionen(auftragId);
+        return;
+    }
+    existing.menge = anzahl;
+    existing.gesamtgewicht = anzahl; // stück → gewicht = menge
+    existing.gesamtpreis = existing.einzelpreis * existing.gesamtgewicht;
+    existing.leergutVonPositionId = posId;
+    await existing.save();
+    await reorderArtikelPositionen(auftragId);
+  } else {
+    await createArtikelPosition({
+      artikel: artikel._id.toString(),
+      menge: anzahl,
+      einheit: "stück",
+      auftragId: auftragId,
+      zerlegung: false,
+      vakuum: false,
+      leergutVonPositionId: posId,
+    });
+    await reorderArtikelPositionen(auftragId);
+  }
 }
 
 /**
@@ -75,15 +242,26 @@ async function upsertBestandAgg(
 async function computeZielMengeKg(position: any): Promise<number> {
   const artikelId = position.artikel?.toString();
   const einheit = position.kommissioniertEinheit || position.einheit;
-  const kgFromNetto = typeof position.nettogewicht === "number" && isFinite(position.nettogewicht) ? position.nettogewicht : undefined;
+  const kgFromNetto =
+    typeof position.nettogewicht === "number" && isFinite(position.nettogewicht)
+      ? position.nettogewicht
+      : undefined;
   if (kgFromNetto !== undefined) return round3(Math.max(0, kgFromNetto));
 
-  const menge = typeof position.kommissioniertMenge === "number" ? position.kommissioniertMenge : position.menge;
+  const menge =
+    typeof position.kommissioniertMenge === "number"
+      ? position.kommissioniertMenge
+      : position.menge;
   if (!artikelId || !isFinite(menge) || menge <= 0) return 0;
   if (einheit === "kg") return round3(menge);
 
   const g = await getArtikelGewichte(artikelId);
-  const factor = einheit === "stück" ? g.gewichtProStueck : einheit === "kiste" ? g.gewichtProKiste : g.gewichtProKarton;
+  const factor =
+    einheit === "stück"
+      ? g.gewichtProStueck
+      : einheit === "kiste"
+      ? g.gewichtProKiste
+      : g.gewichtProKarton;
   return round3(Math.max(0, menge * (factor || 0)));
 }
 
@@ -91,126 +269,165 @@ async function computeZielMengeKg(position: any): Promise<number> {
  * Bucht Delta für diese Position gegen die angegebenen Chargen.
  * - Delta > 0  → KOMMISSIONIERUNG (negativ)
  * - Delta < 0  → INVENTUR_KORREKTUR (positiv, Rückbuchung)
- */
-async function syncKommissionierungMitBestand(positionId: string, userId: string | undefined) {
-  const position = await ArtikelPosition.findById(positionId);
-  if (!position) return;
-  const auftrag = await Auftrag.findOne({ artikelPosition: position._id });
-  if (!auftrag) return;
+//  */
+// async function syncKommissionierungMitBestand(
+//   positionId: string,
+//   userId: string | undefined
+// ) {
+//   const position = await ArtikelPosition.findById(positionId);
+//   if (!position) return;
+//   const auftrag = await Auftrag.findOne({ artikelPosition: position._id });
+//   if (!auftrag) return;
 
-  const zielKg = await computeZielMengeKg(position as any);
-  const bereits = await sumBereitsGebuchtKg(auftrag._id.toString(), position.artikel.toString(), position._id.toString());
-  let delta = round3(zielKg - bereits);
-  if (Math.abs(delta) < 0.001) return; // nichts zu tun
+//   const zielKg = await computeZielMengeKg(position as any);
+//   const bereits = await sumBereitsGebuchtKg(
+//     auftrag._id.toString(),
+//     position.artikel.toString(),
+//     position._id.toString()
+//   );
+//   let delta = round3(zielKg - bereits);
+//   if (Math.abs(delta) < 0.001) return; // nichts zu tun
 
-  const charges: string[] = Array.isArray((position as any).chargennummern) ? (position as any).chargennummern : [];
-  if (!charges.length) {
-    console.warn(`[BestandSync] Position ${position._id} hat keine Charge ausgewählt – Buchung übersprungen.`);
-    return;
-  }
+//   const charges: string[] = Array.isArray((position as any).chargennummern)
+//     ? (position as any).chargennummern
+//     : [];
+//   if (!charges.length) {
+//     console.warn(
+//       `[BestandSync] Position ${position._id} hat keine Charge ausgewählt – Buchung übersprungen.`
+//     );
+//     return;
+//   }
 
-  // Lade Charge-Details, um Lagerbereich (TK/NON_TK) zu bestimmen
-  const chargeDocs = await ChargeModel.find({ _id: { $in: charges } }).lean();
-  if (!chargeDocs.length) return;
+//   // Lade Charge-Details, um Lagerbereich (TK/NON_TK) zu bestimmen
+//   const chargeDocs = await ChargeModel.find({ _id: { $in: charges } }).lean();
+//   if (!chargeDocs.length) return;
 
-  // Stückeln: gleichmäßig über alle angegebenen Chargen verteilen
-  const perCharge = round3(Math.abs(delta) / chargeDocs.length);
+//   // Stückeln: gleichmäßig über alle angegebenen Chargen verteilen
+//   const perCharge = round3(Math.abs(delta) / chargeDocs.length);
 
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      for (const ch of chargeDocs) {
-        const lagerbereich: Lagerbereich = ch.isTK ? "TK" : "NON_TK";
-        const mengeSigniert = delta > 0 ? -perCharge : perCharge; // Abgang = negativ; Rückbuchung = positiv
-        const bewegung = await new BewegungModel({
-          timestamp: new Date(),
-          userId: userId ? new mongoose.Types.ObjectId(userId) : undefined,
-          typ: delta > 0 ? "KOMMISSIONIERUNG" : "INVENTUR_KORREKTUR",
-          artikelId: position.artikel,
-          artikelName: position.artikelName,
-          chargeId: ch._id,
-          menge: mengeSigniert,
-          lagerbereich,
-          auftragId: auftrag._id,
-          notiz: `[POS:${position._id.toString()}] Auto-Sync aus ArtikelPositionService` ,
-          mhd: ch.mhd,
-          schlachtDatum: ch.schlachtDatum,
-          isTK: !!ch.isTK,
-        }).save({ session });
+//   const session = await mongoose.startSession();
+//   try {
+//     await session.withTransaction(async () => {
+//       for (const ch of chargeDocs) {
+//         const lagerbereich: Lagerbereich = ch.isTK ? "TK" : "NON_TK";
+//         const mengeSigniert = delta > 0 ? -perCharge : perCharge; // Abgang = negativ; Rückbuchung = positiv
+//         const bewegung = await new BewegungModel({
+//           timestamp: new Date(),
+//           userId: userId ? new mongoose.Types.ObjectId(userId) : undefined,
+//           typ: delta > 0 ? "KOMMISSIONIERUNG" : "INVENTUR_KORREKTUR",
+//           artikelId: position.artikel,
+//           artikelName: position.artikelName,
+//           chargeId: ch._id,
+//           menge: mengeSigniert,
+//           lagerbereich,
+//           auftragId: auftrag._id,
+//           notiz: `[POS:${position._id.toString()}] Auto-Sync aus ArtikelPositionService`,
+//           mhd: ch.mhd,
+//           schlachtDatum: ch.schlachtDatum,
+//           isTK: !!ch.isTK,
+//         }).save({ session });
 
-        await upsertBestandAgg({ artikelId: position.artikel.toString(), chargeId: ch._id.toString(), lagerbereich, deltaVerfuegbar: mengeSigniert }, session);
-      }
-    });
-  } finally {
-    await session.endSession();
-  }
-}
+//         await upsertBestandAgg(
+//           {
+//             artikelId: position.artikel.toString(),
+//             chargeId: ch._id.toString(),
+//             lagerbereich,
+//             deltaVerfuegbar: mengeSigniert,
+//           },
+//           session
+//         );
+//       }
+//     });
+//   } finally {
+//     await session.endSession();
+//   }
+// }
 
 /**
  * Erstellt eine neue Artikelposition.
  */
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
+type Einheit = "kg" | "stück" | "kiste" | "karton";
+
+function isEinheit(e: any): e is Einheit {
+  return ["kg", "stück", "kiste", "karton"].includes(e);
+}
+
+function computeGesamtgewicht(
+  artikel: any,
+  menge: number,
+  einheit: Einheit
+): number {
+  switch (einheit) {
+    case "kg":
+      return round3(menge);
+    case "stück":
+      return round3((artikel.gewichtProStueck || 0) * menge);
+    case "kiste":
+      return round3((artikel.gewichtProKiste || 0) * menge);
+    case "karton":
+      return round3((artikel.gewichtProKarton || 0) * menge);
+    default:
+      return 0;
+  }
+}
+
 export async function createArtikelPosition(data: {
   artikel: string;
   menge: number;
-  einheit: "kg" | "stück" | "kiste" | "karton";
-  auftragId?: string; // Optional
+  einheit: Einheit;
+  auftragId?: string;
   zerlegung?: boolean;
   vakuum?: boolean;
   bemerkung?: string;
   zerlegeBemerkung?: string;
+  leergutVonPositionId?: mongoose.Types.ObjectId;
 }): Promise<ArtikelPositionResource> {
-  if (!data.artikel || !data.menge || !data.einheit) {
-    throw new Error("Fehlende Felder bei der Artikelposition.");
+  // --- Validierung ---
+  if (!data.artikel) {
+    throw new Error("Artikel ist erforderlich.");
+  }
+  if (data.menge === undefined || data.menge === null || data.menge <= 0) {
+    throw new Error("Menge muss größer als 0 sein.");
+  }
+  if (!isEinheit(data.einheit)) {
+    throw new Error("Ungültige Einheit.");
   }
 
-  // Artikel laden
-  const artikel = await ArtikelModel.findById(data.artikel);
+  // --- Grunddaten laden ---
+  const [artikel, auftrag] = await Promise.all([
+    ArtikelModel.findById(data.artikel),
+    data.auftragId ? Auftrag.findById(data.auftragId) : Promise.resolve(null),
+  ]);
+
   if (!artikel) {
     throw new Error("Artikel nicht gefunden.");
   }
+  if (data.auftragId && !auftrag) {
+    throw new Error("Auftrag nicht gefunden.");
+  }
 
+  // --- Aufpreis / Kundenpreis ---
   let aufpreis = 0;
-
-  // Nur wenn Auftrag-ID existiert:
-  if (data.auftragId) {
-    const auftrag = await Auftrag.findById(data.auftragId);
-    if (!auftrag) {
-      throw new Error("Auftrag nicht gefunden.");
-    }
-
-    if (auftrag.kunde) {
-      const kundenPreis = await getKundenPreis(
-        auftrag.kunde.toString(),
-        data.artikel
-      );
-      aufpreis = kundenPreis.aufpreis;
-    }
+  if (auftrag?.kunde) {
+    const kundenPreis = await getKundenPreis(
+      auftrag.kunde.toString(),
+      data.artikel
+    );
+    aufpreis = kundenPreis.aufpreis || 0;
   }
 
   const basispreis = artikel.preis || 0;
-  const einzelpreis = basispreis + aufpreis;
+  const einzelpreis = round2(basispreis + aufpreis);
 
-  // Gewicht berechnen
-  let gesamtgewicht = 0;
-  switch (data.einheit) {
-    case "kg":
-      gesamtgewicht = data.menge;
-      break;
-    case "stück":
-      gesamtgewicht = (artikel.gewichtProStueck || 0) * data.menge;
-      break;
-    case "kiste":
-      gesamtgewicht = (artikel.gewichtProKiste || 0) * data.menge;
-      break;
-    case "karton":
-      gesamtgewicht = (artikel.gewichtProKarton || 0) * data.menge;
-      break;
-  }
+  // --- Gewicht & Gesamtpreis ---
+  const gesamtgewicht = computeGesamtgewicht(artikel, data.menge, data.einheit);
+  const gesamtpreis = round2(einzelpreis * gesamtgewicht);
 
-  const gesamtpreis = einzelpreis * gesamtgewicht;
-
-  // Artikelposition erstellen
+  // --- Artikelposition erzeugen ---
   const newPosition = new ArtikelPosition({
     artikel: artikel._id,
     artikelName: artikel.name,
@@ -218,81 +435,72 @@ export async function createArtikelPosition(data: {
     einheit: data.einheit,
     zerlegung: data.zerlegung ?? false,
     vakuum: data.vakuum ?? false,
-    bemerkung: data.bemerkung?.trim() || "",
+    bemerkung: (data.bemerkung || "").trim(),
     zerlegeBemerkung: data.zerlegeBemerkung,
     einzelpreis,
     gesamtgewicht,
     gesamtpreis,
-    auftragId: data.auftragId, // ensure auftragId is saved in the position
-    erfassungsModus: artikel.erfassungsModus ?? 'GEWICHT'
+    auftragId: data.auftragId,
+    leergutVonPositionId: data.leergutVonPositionId,
+    erfassungsModus: artikel.erfassungsModus ?? "GEWICHT",
   });
 
   const savedPosition = await newPosition.save();
 
-  // Artikelposition-ID zum Auftrag hinzufügen, wenn Auftrag angegeben wurde
-  if (data.auftragId) {
-    const auftrag = await Auftrag.findById(data.auftragId);
-    if (auftrag) {
-      if (!auftrag.artikelPosition) {
-        auftrag.artikelPosition = [];
+  // --- Auftrag verknüpfen + ggf. Zerlegeauftrag anlegen ---
+  if (auftrag) {
+    // Auftrag immer verknüpfen (auch Leergut), Reihenfolge wird später durch reorder geregelt
+    await Auftrag.findByIdAndUpdate(
+      auftrag._id,
+      {
+        $addToSet: { artikelPosition: savedPosition._id }
       }
-      auftrag.artikelPosition.push(savedPosition._id);
-      await auftrag.save();
+    );
 
-      if (data.zerlegung && data.auftragId) {
-        let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
-          auftragId: data.auftragId,
+    if (data.zerlegung) {
+      let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
+        auftragId: auftrag._id,
+        archiviert: false,
+      });
+
+      const kundenName = (auftrag as any).kunde?.name || "Unbekannt";
+
+      if (zerlegeauftrag) {
+        zerlegeauftrag.artikelPositionen.push({
+          artikelPositionId: savedPosition._id.toString(),
+          artikelName: savedPosition.artikelName,
+          menge: savedPosition.gesamtgewicht,
+          status: "offen",
+          bemerkung: savedPosition.zerlegeBemerkung,
+        });
+        await zerlegeauftrag.save();
+      } else {
+        await ZerlegeAuftragModel.create({
+          auftragId: auftrag._id.toString(),
+          kundenName,
+          artikelPositionen: [
+            {
+              artikelPositionId: savedPosition._id.toString(),
+              artikelName: savedPosition.artikelName,
+              menge: savedPosition.gesamtgewicht,
+              status: "offen",
+              bemerkung: savedPosition.zerlegeBemerkung,
+            },
+          ],
+          erstelltAm: new Date(),
           archiviert: false,
         });
-
-        if (zerlegeauftrag) {
-          zerlegeauftrag.artikelPositionen.push({
-            artikelPositionId: savedPosition._id.toString(),
-            artikelName: savedPosition.artikelName,
-            menge: savedPosition.gesamtgewicht,
-            status: "offen",
-            bemerkung: savedPosition.zerlegeBemerkung,
-          });
-          await zerlegeauftrag.save();
-        } else {
-          const auftragPopulated = await Auftrag.findById(
-            data.auftragId
-          ).populate<{ kunde: { name: string } }>("kunde");
-          const kundenName = auftragPopulated?.kunde?.name || "Unbekannt";
-
-          await ZerlegeAuftragModel.create({
-            auftragId: data.auftragId,
-            kundenName,
-            artikelPositionen: [
-              {
-                artikelPositionId: savedPosition._id.toString(),
-                artikelName: savedPosition.artikelName,
-                menge: savedPosition.gesamtgewicht,
-                status: "offen",
-                bemerkung: savedPosition.zerlegeBemerkung,
-              },
-            ],
-            erstelltAm: new Date(),
-            archiviert: false,
-          });
-        }
       }
     }
   }
 
-  // Falls bereits Kommissionierungswerte gesetzt wurden (Edge-Case) → Sync anstoßen
-  try {
-    if (savedPosition.kommissioniertMenge || savedPosition.nettogewicht) {
-      await syncKommissionierungMitBestand(savedPosition._id.toString(), undefined);
-    }
-  } catch (e) {
-    console.error("[CreatePosition→Bestand] Sync fehlgeschlagen:", (e as Error)?.message);
-  }
-
+  // --- Resource zurückgeben ---
   return {
     id: savedPosition._id.toString(),
     artikel: savedPosition.artikel.toString(),
     artikelName: savedPosition.artikelName,
+    auftragId: savedPosition.auftragId?.toString(),
+    leergutVonPositionId: savedPosition.leergutVonPositionId?.toString(),
     menge: savedPosition.menge,
     einheit: savedPosition.einheit,
     einzelpreis: savedPosition.einzelpreis,
@@ -312,7 +520,7 @@ export async function createArtikelPosition(data: {
     leergut: savedPosition.leergut || [],
     nettogewicht: savedPosition.nettogewicht,
     chargennummern: savedPosition.chargennummern || [],
-    erfassungsModus: savedPosition.erfassungsModus ?? 'GEWICHT'
+    erfassungsModus: savedPosition.erfassungsModus ?? "GEWICHT",
   };
 }
 
@@ -326,12 +534,14 @@ export async function getArtikelPositionById(
   if (!position) {
     throw new Error("Artikelposition nicht gefunden");
   }
-  const artikel = await ArtikelModel.findById(position.artikel)
+  const artikel = await ArtikelModel.findById(position.artikel);
 
   return {
     id: position._id.toString(),
     artikel: position.artikel.toString(),
     artikelName: position.artikelName,
+    auftragId: position.auftragId?.toString(),
+    leergutVonPositionId: position.leergutVonPositionId?.toString(),
     artikelNummer: artikel?.artikelNummer,
     menge: position.menge,
     einheit: position.einheit,
@@ -352,7 +562,7 @@ export async function getArtikelPositionById(
     leergut: position.leergut || [],
     nettogewicht: position.nettogewicht,
     chargennummern: position.chargennummern || [],
-    erfassungsModus: position.erfassungsModus ?? 'GEWICHT'
+    erfassungsModus: position.erfassungsModus ?? "GEWICHT",
   };
 }
 
@@ -371,6 +581,8 @@ export async function getAllArtikelPositionen(): Promise<
       id: pos._id.toString(),
       artikel: pos.artikel.toString(),
       artikelName: pos.artikelName,
+      auftragId: pos.auftragId?.toString(),
+      leergutVonPositionId: pos.leergutVonPositionId?.toString(),
       menge: pos.menge,
       einheit: pos.einheit,
       einzelpreis: pos.einzelpreis,
@@ -390,7 +602,7 @@ export async function getAllArtikelPositionen(): Promise<
       leergut: pos.leergut || [],
       nettogewicht: pos.nettogewicht,
       chargennummern: pos.chargennummern || [],
-      erfassungsModus: pos.erfassungsModus ?? 'GEWICHT'
+      erfassungsModus: pos.erfassungsModus ?? "GEWICHT",
     });
   }
 
@@ -422,18 +634,19 @@ export async function updateArtikelPositionKommissionierung(
   // --- Helpers: robust number parsing ---
   const toNumberOrUndefined = (v: any): number | undefined => {
     if (v === null || v === undefined) return undefined;
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-    if (typeof v === 'string') {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
       const trimmed = v.trim();
-      if (trimmed === '') return undefined;
-      const normalized = trimmed.replace(',', '.');
+      if (trimmed === "") return undefined;
+      const normalized = trimmed.replace(",", ".");
       const n = Number(normalized);
       return Number.isFinite(n) ? n : undefined;
     }
     return undefined;
   };
 
-  const isFiniteNumber = (n: any): n is number => typeof n === 'number' && Number.isFinite(n);
+  const isFiniteNumber = (n: any): n is number =>
+    typeof n === "number" && Number.isFinite(n);
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new Error("Ungültige Artikelpositions-ID");
@@ -442,7 +655,9 @@ export async function updateArtikelPositionKommissionierung(
   if (!position) {
     throw new Error("Artikelposition nicht gefunden");
   }
-  const auftrag = await Auftrag.findOne({ artikelPosition: id });
+  const auftrag = position.auftragId
+    ? await Auftrag.findById(position.auftragId)
+    : null;
   const kommissioniertStatus = auftrag?.kommissioniertStatus;
   const kontrolliertStatus = auftrag?.kontrolliertStatus;
   // Wer ist Kommissionierer?
@@ -486,7 +701,7 @@ export async function updateArtikelPositionKommissionierung(
         position.kommissioniertAm = data.kommissioniertAm;
 
       // Bruttogewicht: nur setzen, wenn eine gültige Zahl übergeben wurde; leere Strings/null löschen den Wert
-      if (Object.prototype.hasOwnProperty.call(data, 'bruttogewicht')) {
+      if (Object.prototype.hasOwnProperty.call(data, "bruttogewicht")) {
         const n = toNumberOrUndefined((data as any).bruttogewicht);
         if (isFiniteNumber(n)) position.bruttogewicht = n;
         else position.bruttogewicht = undefined as any;
@@ -500,14 +715,62 @@ export async function updateArtikelPositionKommissionierung(
             const gew = toNumberOrUndefined(l.leergutGewicht as any);
             if (!isFiniteNumber(anz) || !isFiniteNumber(gew)) return null;
             return {
-              leergutArt: String(l.leergutArt || ''),
+              leergutArt: String(l.leergutArt || ""),
               leergutAnzahl: anz,
               leergutGewicht: gew,
             };
           })
-          .filter((x): x is { leergutArt: string; leergutAnzahl: number; leergutGewicht: number } => x !== null);
+          .filter(
+            (
+              x
+            ): x is {
+              leergutArt: string;
+              leergutAnzahl: number;
+              leergutGewicht: number;
+            } => x !== null
+          );
+
 
         position.leergut = parsed;
+
+        // 🔁 Entferne alte Leergut-Artikelpositionen, deren Art nicht mehr vorhanden ist
+        if (auftrag) {
+          const erlaubteArtikelIds: string[] = [];
+
+          for (const l of parsed) {
+            const key = String(l.leergutArt || "").trim().toLowerCase();
+            const artikelName = LEERGUT_OPTION_TO_ARTIKELNAME[key];
+            if (!artikelName) continue;
+
+            const artikel = await ArtikelModel.findOne({
+              name: artikelName,
+              kategorie: "Leergut",
+            }).lean();
+
+            if (artikel?._id) {
+              erlaubteArtikelIds.push(artikel._id.toString());
+            }
+          }
+
+
+          await ArtikelPosition.deleteMany({
+            auftragId: auftrag._id,
+            leergutVonPositionId: position._id,
+            artikel: { $nin: erlaubteArtikelIds.map(id => new mongoose.Types.ObjectId(id)) },
+          });
+        }
+
+        // ⚠️ Leergut-Artikelpositionen zum Auftrag hinzufügen
+        if (auftrag && parsed.length > 0) {
+          for (const l of parsed) {
+            await createLeergutArtikelPositionFromSelection(
+              auftrag.id.toString(),
+              position._id.toString(),
+              l.leergutArt,
+              l.leergutAnzahl
+            );
+          }
+        }
       }
 
       if (data.chargennummern !== undefined)
@@ -516,7 +779,9 @@ export async function updateArtikelPositionKommissionierung(
     // Nettogewicht automatisch berechnen
     {
       const brutto = position.bruttogewicht;
-      const hatLeergut = Array.isArray(position.leergut ?? []) && (position.leergut ?? []).length > 0;
+      const hatLeergut =
+        Array.isArray(position.leergut ?? []) &&
+        (position.leergut ?? []).length > 0;
       if (isFiniteNumber(brutto) && hatLeergut) {
         const leerSumme = (position.leergut ?? []).reduce((sum, l) => {
           const anz = toNumberOrUndefined((l as any).leergutAnzahl);
@@ -565,12 +830,13 @@ export async function updateArtikelPositionKommissionierung(
         position.kommissioniertAm = data.kommissioniertAm;
 
       // Bruttogewicht: nur setzen, wenn eine gültige Zahl übergeben wurde; leere Strings/null löschen den Wert
-      if (Object.prototype.hasOwnProperty.call(data, 'bruttogewicht')) {
+      if (Object.prototype.hasOwnProperty.call(data, "bruttogewicht")) {
         const n = toNumberOrUndefined((data as any).bruttogewicht);
         if (isFiniteNumber(n)) position.bruttogewicht = n;
         else position.bruttogewicht = undefined as any;
       }
 
+      // Leergut: tolerant parsen; Einträge mit fehlenden Zahlen werden übersprungen
       // Leergut: tolerant parsen; Einträge mit fehlenden Zahlen werden übersprungen
       if (data.leergut !== undefined && Array.isArray(data.leergut)) {
         const parsed = data.leergut
@@ -579,14 +845,27 @@ export async function updateArtikelPositionKommissionierung(
             const gew = toNumberOrUndefined(l.leergutGewicht as any);
             if (!isFiniteNumber(anz) || !isFiniteNumber(gew)) return null;
             return {
-              leergutArt: String(l.leergutArt || ''),
+              leergutArt: String(l.leergutArt || ""),
               leergutAnzahl: anz,
               leergutGewicht: gew,
             };
           })
-          .filter((x): x is { leergutArt: string; leergutAnzahl: number; leergutGewicht: number } => x !== null);
+          .filter(
+            (
+              x
+            ): x is {
+              leergutArt: string;
+              leergutAnzahl: number;
+              leergutGewicht: number;
+            } => x !== null
+          );
 
         position.leergut = parsed;
+
+        // ⚠️ Leergut-Artikelpositionen zum Auftrag hinzufügen
+        if (auftrag && parsed.length > 0) {
+          // Kontrollierer erzeugt kein Leergut mehr
+        }
       }
 
       if (data.chargennummern !== undefined)
@@ -595,7 +874,9 @@ export async function updateArtikelPositionKommissionierung(
     // Nettogewicht automatisch berechnen
     {
       const brutto = position.bruttogewicht;
-      const hatLeergut = Array.isArray(position.leergut ?? []) && (position.leergut ?? []).length > 0;
+      const hatLeergut =
+        Array.isArray(position.leergut ?? []) &&
+        (position.leergut ?? []).length > 0;
       if (isFiniteNumber(brutto) && hatLeergut) {
         const leerSumme = (position.leergut ?? []).reduce((sum, l) => {
           const anz = toNumberOrUndefined((l as any).leergutAnzahl);
@@ -616,16 +897,13 @@ export async function updateArtikelPositionKommissionierung(
   // In allen anderen Fällen: diese Felder NICHT ändern (ignorieren)
 
   const updated = await position.save();
-  // --- Bestands-Synchronisierung nach Kommissionierungs-/Kontroll-Update ---
-  try {
-    await syncKommissionierungMitBestand(updated._id.toString(), userId);
-  } catch (e) {
-    console.error("[Kommissionierung→Bestand] Sync fehlgeschlagen:", (e as Error)?.message);
-  }
+
   return {
     id: updated._id.toString(),
     artikel: updated.artikel.toString(),
     artikelName: updated.artikelName,
+    auftragId: updated.auftragId?.toString(),
+    leergutVonPositionId: updated.leergutVonPositionId?.toString(),
     menge: updated.menge,
     einheit: updated.einheit,
     einzelpreis: updated.einzelpreis,
@@ -657,6 +935,7 @@ export async function updateArtikelPositionNormale(
     artikel: string;
     menge: number;
     einheit: "kg" | "stück" | "kiste" | "karton";
+    einzelpreis: number;
     zerlegung: boolean;
     vakuum: boolean;
     bemerkung: string;
@@ -709,7 +988,8 @@ export async function updateArtikelPositionNormale(
       if (auftrag) {
         const kundenName = auftrag.kunde?.name || "Unbekannt";
         const artikelDocForZ = await ArtikelModel.findById(position.artikel);
-        const artikelNameResolved = position.artikelName || artikelDocForZ?.name || "Unbekannt";
+        const artikelNameResolved =
+          position.artikelName || artikelDocForZ?.name || "Unbekannt";
         let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
           auftragId: auftrag._id,
           archiviert: false,
@@ -745,7 +1025,8 @@ export async function updateArtikelPositionNormale(
     }
     if (vorherZerlegung && data.zerlegung) {
       const artikelDocForZ = await ArtikelModel.findById(position.artikel);
-      const artikelNameResolved = position.artikelName || artikelDocForZ?.name || "Unbekannt";
+      const artikelNameResolved =
+        position.artikelName || artikelDocForZ?.name || "Unbekannt";
       const zerlegeauftrag = await ZerlegeAuftragModel.findOne({
         "artikelPositionen.artikelPositionId": position._id,
       });
@@ -810,21 +1091,29 @@ export async function updateArtikelPositionNormale(
       position.gesamtgewicht = gesamtgewicht;
     }
   }
-  // Einzelpreis mit getKundenPreis basierend auf Auftrag ermitteln
-  const auftrag = await Auftrag.findOne({ artikelPosition: id });
-  let aufpreis = 0;
-  if (auftrag && auftrag.kunde) {
-    const kundenPreis = await getKundenPreis(
-      auftrag.kunde.toString(),
-      position.artikel.toString()
-    );
-    aufpreis = kundenPreis.aufpreis;
+  // Einzelpreis: entweder manuell übergeben oder automatisch berechnen
+  if (data.einzelpreis !== undefined) {
+    // Manuell gesetzter Einzelpreis
+    position.einzelpreis = round2(data.einzelpreis);
+  } else {
+    // Einzelpreis mit getKundenPreis basierend auf Auftrag ermitteln
+    const auftrag = position.auftragId
+      ? await Auftrag.findById(position.auftragId)
+      : null;
+    let aufpreis = 0;
+    if (auftrag && auftrag.kunde) {
+      const kundenPreis = await getKundenPreis(
+        auftrag.kunde.toString(),
+        position.artikel.toString()
+      );
+      aufpreis = kundenPreis.aufpreis;
+    }
+    const artikel = await ArtikelModel.findById(position.artikel);
+    const basispreis = artikel?.preis ?? 0;
+    position.einzelpreis = round2(basispreis + aufpreis);
   }
-  const artikel = await ArtikelModel.findById(position.artikel);
-  const basispreis = artikel?.preis ?? 0;
-  position.einzelpreis = basispreis + aufpreis;
   // Gesamtpreis neu berechnen
-  position.gesamtpreis = position.einzelpreis * (position.gesamtgewicht ?? 0);
+  position.gesamtpreis = round2(position.einzelpreis * (position.gesamtgewicht ?? 0));
   const updated = await position.save();
   if (updated.zerlegung === true) {
     const zerlegeauftrag = await ZerlegeAuftragModel.findOne({
@@ -832,7 +1121,8 @@ export async function updateArtikelPositionNormale(
     });
     if (zerlegeauftrag) {
       const artikelDocForZ2 = await ArtikelModel.findById(updated.artikel);
-      const artikelNameResolved2 = updated.artikelName || artikelDocForZ2?.name || "Unbekannt";
+      const artikelNameResolved2 =
+        updated.artikelName || artikelDocForZ2?.name || "Unbekannt";
       // Duplikate verhindern
       zerlegeauftrag.artikelPositionen =
         zerlegeauftrag.artikelPositionen.filter(
@@ -852,6 +1142,8 @@ export async function updateArtikelPositionNormale(
     id: updated._id.toString(),
     artikel: updated.artikel.toString(),
     artikelName: updated.artikelName,
+    auftragId: updated.auftragId?.toString(),
+    leergutVonPositionId: updated.leergutVonPositionId?.toString(),
     menge: updated.menge,
     einheit: updated.einheit,
     einzelpreis: updated.einzelpreis,
@@ -871,6 +1163,123 @@ export async function updateArtikelPositionNormale(
     leergut: updated.leergut || [],
     nettogewicht: updated.nettogewicht,
     chargennummern: updated.chargennummern || [],
+  };
+}
+
+/**
+ * Aktualisiert Leergut einer Artikelposition.
+ * - Hinzufügen neuer Leergutarten
+ * - Aktualisieren von Anzahl/Gewicht
+ * - Entfernen von Leergut (Anzahl <= 0 oder nicht mehr übergeben)
+ * Synchronisiert automatisch die zugehörigen Leergut‑Artikelpositionen im Auftrag.
+ */
+export async function updateLeergut(
+  positionId: string,
+  leergutInput: {
+    leergutArt: string;
+    leergutAnzahl: number;
+    leergutGewicht: number;
+  }[]
+): Promise<ArtikelPositionResource> {
+  if (!mongoose.Types.ObjectId.isValid(positionId)) {
+    throw new Error("Ungültige Artikelpositions-ID");
+  }
+
+  const position = await ArtikelPosition.findById(positionId);
+  if (!position) {
+    throw new Error("Artikelposition nicht gefunden");
+  }
+
+  const auftrag = position.auftragId
+    ? await Auftrag.findById(position.auftragId)
+    : null;
+
+  if (!auftrag) {
+    throw new Error("Kein Auftrag zur Artikelposition gefunden");
+  }
+
+  // --- Leergut normalisieren & validieren ---
+  const normalized = leergutInput
+    .map((l) => ({
+      leergutArt: String(l.leergutArt || "").trim(),
+      leergutAnzahl: Number(l.leergutAnzahl),
+      leergutGewicht: Number(l.leergutGewicht),
+    }))
+    .filter(
+      (l) =>
+        l.leergutArt &&
+        Number.isFinite(l.leergutAnzahl) &&
+        Number.isFinite(l.leergutGewicht)
+    );
+
+  // --- Leergut an Position setzen ---
+  position.leergut = normalized;
+  await position.save();
+
+  // --- erlaubte Leergut‑Artikel ermitteln ---
+  const erlaubteArtikelIds: string[] = [];
+
+  for (const l of normalized) {
+    const key = l.leergutArt.toLowerCase();
+    const artikelName = LEERGUT_OPTION_TO_ARTIKELNAME[key];
+    if (!artikelName) continue;
+
+    const artikel = await ArtikelModel.findOne({
+      name: artikelName,
+      kategorie: "Leergut",
+    }).lean();
+
+    if (artikel?._id) {
+      erlaubteArtikelIds.push(artikel._id.toString());
+    }
+  }
+
+  // --- nicht mehr vorhandenes Leergut entfernen ---
+  await ArtikelPosition.deleteMany({
+    auftragId: auftrag._id,
+    leergutVonPositionId: position._id,
+    artikel: {
+      $nin: erlaubteArtikelIds.map((id) => new mongoose.Types.ObjectId(id)),
+    },
+  });
+
+  // --- Leergut‑Artikelpositionen upserten ---
+  for (const l of normalized) {
+    if (l.leergutAnzahl <= 0) continue;
+
+    await createLeergutArtikelPositionFromSelection(
+      auftrag._id.toString(),
+      position._id.toString(),
+      l.leergutArt,
+      l.leergutAnzahl
+    );
+  }
+
+  // --- Nettogewicht neu berechnen ---
+  if (typeof position.bruttogewicht === "number") {
+    const leerSumme = normalized.reduce(
+      (sum, l) => sum + l.leergutAnzahl * l.leergutGewicht,
+      0
+    );
+    position.nettogewicht = position.bruttogewicht - leerSumme;
+    await position.save();
+  }
+
+  return {
+    id: position._id.toString(),
+    artikel: position.artikel.toString(),
+    artikelName: position.artikelName,
+    auftragId: position.auftragId?.toString(),
+    leergutVonPositionId: position.leergutVonPositionId?.toString(),
+    menge: position.menge,
+    einheit: position.einheit,
+    einzelpreis: position.einzelpreis,
+    gesamtgewicht: position.gesamtgewicht,
+    gesamtpreis: position.gesamtpreis,
+    bruttogewicht: position.bruttogewicht,
+    nettogewicht: position.nettogewicht,
+    leergut: position.leergut || [],
+    chargennummern: position.chargennummern || [],
   };
 }
 //delete

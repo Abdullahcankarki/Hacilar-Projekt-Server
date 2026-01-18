@@ -75,7 +75,7 @@ function berlinIsoFromDate(d?: Date | string | null): string | undefined {
  * Gibt eine Map artikelId -> menge zurück.
  */
 async function aggregatePositionsByArtikel(auftragId: string): Promise<Map<string, number>> {
-  const posDocs = await ArtikelPosition.find({ auftrag: auftragId }, { artikel: 1, menge: 1 }).lean();
+  const posDocs = await ArtikelPosition.find({ auftragId }, { artikel: 1, menge: 1 }).lean();
   const map = new Map<string, number>();
   for (const p of posDocs) {
     const aid = (p as any).artikel?.toString();
@@ -303,10 +303,6 @@ export async function createAuftrag(data: {
     try {
       await onAuftragLieferdatumSet(savedAuftrag._id.toString());
     } catch (err) {
-      console.error(
-        "[createAuftrag] onAuftragLieferdatumSet fehlgeschlagen:",
-        (err as Error)?.message
-      );
     }
   }
   try {
@@ -314,10 +310,8 @@ export async function createAuftrag(data: {
     // Optional: Warnungen berechnen (nicht blockierend)
     const _warn = await computeBestandsWarnungenForAuftrag(savedAuftrag._id.toString());
     if (_warn.length) {
-      console.warn("[createAuftrag] Bestandswarnungen:", _warn);
     }
   } catch (e) {
-    console.error("[createAuftrag] Reservierungs-Sync fehlgeschlagen:", (e as Error)?.message);
   }
   const totals = await computeTotals(savedAuftrag);
   // Persistiere die berechneten Totale auch im Auftrag-Dokument (falls Felder im Schema vorhanden sind)
@@ -327,10 +321,6 @@ export async function createAuftrag(data: {
       { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }
     );
   } catch (e) {
-    console.warn(
-      "[createAuftrag] Konnte gewicht/preis nicht persistieren (Schema ohne Felder?)",
-      (e as Error)?.message
-    );
   }
   return convertAuftragToResource(savedAuftrag, totals);
 }
@@ -570,8 +560,6 @@ export async function updateAuftrag(
       const kdoc = await Kunde.findById(data.kunde, { name: 1 }).lean();
       if (kdoc?.name) updateData.kundeName = kdoc.name;
     } catch (e) {
-      // falls Lookup fehlschlägt, Auftrag-Update trotzdem nicht verhindern
-      console.warn("[updateAuftrag] kundeName konnte nicht gesetzt werden:", (e as Error)?.message);
     }
   }
   if (data.artikelPosition) updateData.artikelPosition = data.artikelPosition;
@@ -641,11 +629,6 @@ export async function updateAuftrag(
         await onAuftragDatumOderRegionGeaendert(updatedAuftrag._id.toString());
       }
     } catch (err) {
-      // Update soll nicht an Hook-Fehler scheitern
-      console.error(
-        "[updateAuftrag] Tour-Hook fehlgeschlagen:",
-        (err as Error)?.message
-      );
     }
   }
 
@@ -656,11 +639,9 @@ export async function updateAuftrag(
       await syncReservierungenForAuftrag(updatedAuftrag._id.toString());
       const _warn = await computeBestandsWarnungenForAuftrag(updatedAuftrag._id.toString());
       if (_warn.length) {
-        console.warn("[updateAuftrag] Bestandswarnungen:", _warn);
       }
     }
   } catch (e) {
-    console.error("[updateAuftrag] Reservierungs-Sync fehlgeschlagen:", (e as Error)?.message);
   }
 
   // 6) Totals & Rückgabe
@@ -673,10 +654,6 @@ export async function updateAuftrag(
     );
     await onAuftragGewichtGeaendert(updatedAuftrag._id.toString());
   } catch (e) {
-    console.warn(
-      "[updateAuftrag] Persist/Synchronize gewicht/preis fehlgeschlagen:",
-      (e as Error)?.message
-    );
   }
   return convertAuftragToResource(updatedAuftrag, totals);
 }
@@ -698,9 +675,19 @@ export async function getLetzterAuftragMitPositionenByKundenId(
   const totals = await computeTotals(auftrag);
   const auftragResource = convertAuftragToResource(auftrag, totals);
 
-  const positionen = await ArtikelPosition.find({
-    _id: { $in: auftrag.artikelPosition },
-  });
+  const positionen = await ArtikelPosition.aggregate([
+    { $match: { _id: { $in: auftrag.artikelPosition } } },
+    {
+      $lookup: {
+        from: ArtikelModel.collection.name,
+        localField: "artikel",
+        foreignField: "_id",
+        as: "artikelDoc"
+      }
+    },
+    { $unwind: { path: "$artikelDoc", preserveNullAndEmptyArrays: true } },
+    { $match: { "artikelDoc.kategorie": { $ne: "Leergut" } } }
+  ]);
 
   // Deduplicate Artikel-IDs and fetch in parallel (still using getArtikelById to respect pricing rules)
   const uniqueArtikelIds = Array.from(
@@ -723,6 +710,7 @@ export async function getLetzterAuftragMitPositionenByKundenId(
       id: pos._id.toString(),
       artikel: aid || "",
       artikelName: pos.artikelName,
+      auftragId: pos.auftragId?.toString(),
       menge: pos.menge,
       einheit: pos.einheit,
       einzelpreis: artikel?.preis,
@@ -751,10 +739,20 @@ export async function getLetzterArtikelFromAuftragByKundenId(
     return [];
   }
 
-  // ArtikelPositionen laden
-  const artikelPositionen = await ArtikelPosition.find({
-    _id: { $in: auftrag[0].artikelPosition },
-  });
+  // ArtikelPositionen laden (mit Leergut-Filter)
+  const artikelPositionen = await ArtikelPosition.aggregate([
+    { $match: { _id: { $in: auftrag[0].artikelPosition } } },
+    {
+      $lookup: {
+        from: ArtikelModel.collection.name,
+        localField: "artikel",
+        foreignField: "_id",
+        as: "artikelDoc"
+      }
+    },
+    { $unwind: { path: "$artikelDoc", preserveNullAndEmptyArrays: true } },
+    { $match: { "artikelDoc.kategorie": { $ne: "Leergut" } } }
+  ]);
 
   // Nur Artikel-IDs extrahieren (distinct)
   const artikelIds = artikelPositionen
@@ -913,6 +911,23 @@ export async function setAuftragInBearbeitung(
   const updatedAuftrag = await Auftrag.findByIdAndUpdate(
     id,
     { status: "in Bearbeitung", kommissioniertStatus: "offen" },
+    { new: true }
+  ).populate("kunde", "name");
+
+  if (!updatedAuftrag) {
+    throw new Error("Auftrag nicht gefunden");
+  }
+
+  const totals = await computeTotals(updatedAuftrag);
+  return convertAuftragToResource(updatedAuftrag, totals);
+}
+
+export async function setAuftragInFertig(
+  id: string
+): Promise<AuftragResource> {
+  const updatedAuftrag = await Auftrag.findByIdAndUpdate(
+    id,
+    { status: "abgeschlossen" },
     { new: true }
   ).populate("kunde", "name");
 
@@ -1263,12 +1278,6 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
   const { fromUTC, toUTC } = berlinDayBoundsISO(params.lieferdatumVon, params.lieferdatumBis);
 
   if (DEBUG_BESTELLTE || (params as any)?.debug) {
-    console.log("[getBestellteArtikelAggregiert] params:", {
-      ...params,
-      lieferdatumVon: params.lieferdatumVon,
-      lieferdatumBis: params.lieferdatumBis,
-    });
-    console.log("[getBestellteArtikelAggregiert] date-bounds:", { fromUTC, toUTC });
   }
 
   // Basispipeline
@@ -1377,42 +1386,6 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
 
   // --- Deep debug probe: pre-group sample and count ---
   if (DEBUG_BESTELLTE || (params as any)?.debug) {
-    try {
-      const preGroupCount = await ArtikelPosition.aggregate([...pipeline, { $count: "n" }]);
-      console.log("[getBestellteArtikelAggregiert] pre-group count:", preGroupCount?.[0]?.n ?? 0);
-      const sample = await ArtikelPosition.aggregate([
-        ...pipeline,
-        { $limit: 5 },
-        {
-          $project: {
-            _dbgAuftragId: "$kundeId",
-            _dbgLieferdatum: "$lieferdatum",
-            _dbgArtikelId: "$artikelId",
-            _dbgArtikelName: "$artikelName",
-            _dbgArtikelNummer: "$artikelNummer",
-            _dbgKundeName: "$kundeName",
-            _dbgKundenNummer: "$kundenNummer",
-            menge: 1,
-            einheit: 1,
-            gesamtpreis: 1,
-            _joinAuftragId: "$_joinAuftragId",
-          },
-        },
-      ]);
-      console.log("[getBestellteArtikelAggregiert] pre-group sample (max 5):", sample);
-      if ((preGroupCount?.[0]?.n ?? 0) === 0) {
-        try {
-          const totalPos = await ArtikelPosition.countDocuments({});
-          console.log("[getBestellteArtikelAggregiert] DIAG: artikelpositions.count =", totalPos);
-          const rawSample = await ArtikelPosition.find({}, { _id: 1, auftrag: 1, auftragId: 1, artikel: 1 }).limit(5).lean();
-          console.log("[getBestellteArtikelAggregiert] DIAG: artikelpositions.sample =", rawSample);
-        } catch (e) {
-          console.warn("[getBestellteArtikelAggregiert] DIAG: failed to read base collection:", (e as any)?.message || e);
-        }
-      }
-    } catch (e) {
-      console.warn("[getBestellteArtikelAggregiert] pre-group probe failed:", (e as any)?.message || e);
-    }
   }
 
   // Gruppierungs-Schlüssel
@@ -1427,22 +1400,6 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
   }
 
   if (DEBUG_BESTELLTE || (params as any)?.debug) {
-    console.log("[getBestellteArtikelAggregiert] collections:", {
-      artikelPosition: ArtikelPosition.collection.name,
-      auftrag: Auftrag.collection.name,
-      artikel: ArtikelModel.collection.name,
-      kunde: Kunde.collection.name,
-    });
-    try {
-      const preview = JSON.parse(JSON.stringify(pipeline, (_k, v) => {
-        // regex stringify
-        if (v && v.$regex) return { $regex: String(v.$regex), $options: v.$options };
-        return v;
-      }));
-      console.log("[getBestellteArtikelAggregiert] pipeline(pre-group):", preview);
-    } catch {
-      console.log("[getBestellteArtikelAggregiert] pipeline(pre-group): [circular/unstable]");
-    }
   }
 
   pipeline.push(
@@ -1490,23 +1447,13 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
   // Ausführen auf ArtikelPosition-Kollektion mit Timing/Debug
   let rows: any[] = [];
   const tLabel = "[getBestellteArtikelAggregiert] aggregate";
-  if (DEBUG_BESTELLTE || (params as any)?.debug) console.time(tLabel);
+  if (DEBUG_BESTELLTE || (params as any)?.debug) {}
   try {
     rows = await ArtikelPosition.aggregate(pipeline);
   } catch (err: any) {
-    console.error("[getBestellteArtikelAggregiert] aggregate error:", err?.message || err);
-    try {
-      const preview = JSON.parse(JSON.stringify(pipeline, (_k, v) => {
-        if (v && v.$regex) return { $regex: String(v.$regex), $options: v.$options };
-        return v;
-      }));
-      console.error("[getBestellteArtikelAggregiert] pipeline at error:", preview);
-    } catch {
-      console.error("[getBestellteArtikelAggregiert] pipeline at error: [circular/unstable]");
-    }
     throw err;
   } finally {
-    if (DEBUG_BESTELLTE || (params as any)?.debug) console.timeEnd(tLabel);
+    if (DEBUG_BESTELLTE || (params as any)?.debug) {}
   }
   // Typkonforme Nachbearbeitung: nur gewünschte Felder ausgeben
   const mapped = rows.map((r: any) => {
@@ -1520,10 +1467,6 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
     return out;
   });
   if (DEBUG_BESTELLTE || (params as any)?.debug) {
-    console.log("[getBestellteArtikelAggregiert] result.count =", mapped.length);
-    if (mapped.length > 0) {
-      console.log("[getBestellteArtikelAggregiert] result.sample =", mapped.slice(0, 3));
-    }
   }
   return mapped as BestellteArtikelAggRow[];
 }

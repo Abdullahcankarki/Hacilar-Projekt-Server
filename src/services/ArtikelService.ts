@@ -1,4 +1,3 @@
-const logAA = (...args: any[]) => console.log("[ArtikelAnalytics]", ...args);
 import { KundenPreisModel } from "../model/KundenPreisModel";
 import { ArtikelModel } from "../model/ArtikelModel"; // Pfad ggf. anpassen
 import { ArtikelResource } from "../Resources"; // Pfad ggf. anpassen
@@ -433,8 +432,7 @@ export async function getArtikelAnalytics(
     recentOrdersLimit?: number;
   }
 ): Promise<ArtikelAnalytics> {
-  logAA("start", { artikelId, params });
-  console.time("getArtikelAnalytics");
+  
   const granularity = params.granularity ?? "day";
   const fromDate = new Date(params.from);
   const toDate = new Date(params.to);
@@ -444,14 +442,12 @@ export async function getArtikelAnalytics(
     throw new Error("Ungültiger Datumsbereich (from/to)");
   }
 
-  logAA("dateRange", { fromDate, toDate, granularity });
 
   const artikelObjectId = new Types.ObjectId(artikelId);
 
   // Build collection names dynamically (robust against custom collection names)
   const auftragCollection = Auftrag.collection.name;
   const kundeCollection = Kunde.collection.name;
-  logAA("collections", { auftragCollection, kundeCollection });
 
   // Aggregation startet bei ArtikelPositionen
   const pipeline: any[] = [
@@ -852,19 +848,15 @@ export async function getArtikelAnalytics(
     },
   ];
 
-  logAA("pipelinePrepared", { matchArtikel: artikelObjectId.toHexString() });
   // Deaktiviert volles Pipeline-Logging standardmäßig, aktiviere bei Bedarf:
   if (process.env.ANALYTICS_LOG_PIPELINE === "1") {
     try {
-      logAA("pipeline", JSON.stringify(pipeline));
+      // (pipeline logging removed)
     } catch {
-      logAA("pipeline", "JSON stringify failed");
+      // (pipeline logging removed)
     }
   }
-  console.time("aggregate:getArtikelAnalytics");
   const agg = await (ArtikelPosition as any).aggregate(pipeline).exec();
-  console.timeEnd("aggregate:getArtikelAnalytics");
-  logAA("aggregateResultLength", Array.isArray(agg) ? agg.length : -1);
   const first = agg[0] || {};
 
   // Preis-Histogramm bleibt wie bisher...
@@ -944,9 +936,9 @@ export async function getArtikelAnalytics(
           { $limit: 3 },
         ])
         .exec();
-      logAA("sample.noDateFields", sampleNoDate);
+      // (logging removed)
     } catch (e) {
-      logAA("sample.noDateFields.error", String(e));
+      // (logging removed)
     }
   }
 
@@ -959,14 +951,12 @@ export async function getArtikelAnalytics(
     minPreis: null,
     maxPreis: null,
   };
-  logAA("totals", totals);
 
   // Top-Kunden begrenzen (optional)
   let byCustomer = Array.isArray(first.byCustomer) ? first.byCustomer : [];
   if (params.topCustomersLimit && params.topCustomersLimit > 0) {
     byCustomer = byCustomer.slice(0, params.topCustomersLimit);
   }
-  logAA("byCustomer.count", Array.isArray(byCustomer) ? byCustomer.length : 0);
 
   // Preis-Histogramm normalisieren (Mongo $bucketAuto liefert min/max unter _id.{min,max})
   const rawBuckets = Array.isArray(first.priceHistogram)
@@ -987,10 +977,7 @@ export async function getArtikelAnalytics(
         : null,
     count: typeof b.count === "number" ? b.count : 0,
   }));
-  logAA("priceHistogram.buckets", priceHistogram.length);
-  if (process.env.ANALYTICS_LOG_PIPELINE === "1") {
-    logAA("priceHistogram.sample", priceHistogram.slice(0, 3));
-  }
+  
 
   // Timeline formatieren (ISO-String)
   const timeline = (Array.isArray(first.timeline) ? first.timeline : []).map(
@@ -1000,14 +987,10 @@ export async function getArtikelAnalytics(
       umsatz: t.umsatz,
     })
   );
-  logAA("timeline.points", timeline.length);
 
   const recentOrders = Array.isArray(first.recentOrders)
     ? first.recentOrders
     : [];
-  logAA("recentOrders.count", recentOrders.length);
-  logAA("fulfillment", fulfillment);
-  logAA("fulfillmentTimeline.points", fulfillmentTimeline.length);
 
   const result: ArtikelAnalytics = {
     artikelId,
@@ -1023,7 +1006,5 @@ export async function getArtikelAnalytics(
     recentOrders,
   };
 
-  console.timeEnd("getArtikelAnalytics");
-  logAA("done", { artikelId });
   return result;
 }

@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { Types } from "mongoose";
+import { AuthError } from "../routes/CustomErrors";
 
 // JWT-Secret, idealerweise über Umgebungsvariablen konfiguriert
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
@@ -410,35 +411,38 @@ export async function deleteKunde(
   }
 }
 
-/**
- * Authentifiziert einen Kunden anhand von Email und Passwort.
- * Bei erfolgreicher Authentifizierung wird ein JWT-Token zurückgegeben.
- */
+
 export async function loginKunde(credentials: {
   email: string;
   password: string;
 }): Promise<{ token: string; user: LoginResource }> {
   const { email: rawEmail, password } = credentials;
+
   if (!rawEmail || !password) {
-    throw new Error("Email und Passwort sind erforderlich");
+    throw new AuthError("MISSING_FIELDS", "Email und Passwort sind erforderlich", 400);
   }
+
   const email = normalizeEmail(rawEmail);
   const kunde = await Kunde.findOne({ email });
   if (!kunde) {
-    throw new Error("Ungültige Anmeldedaten");
+    throw new AuthError("INVALID_EMAIL", "Diese Email existiert nicht.", 401);
   }
+
   const passwordValid = await bcrypt.compare(password, kunde.password);
   if (!passwordValid) {
-    throw new Error("Ungültige Anmeldedaten");
+    throw new AuthError("INVALID_PASSWORD", "Passwort ist falsch.", 401);
   }
+
   if (!kunde.isApproved) {
-    throw new Error("Nicht genehmigt");
+    throw new AuthError("NOT_APPROVED", "Der Account wurde noch nicht freigegeben.", 403);
   }
+
   const payload: LoginResource = {
     id: kunde._id.toString(),
     role: ["kunde"],
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, // Token gültig für 1 Tag
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24
   };
+
   const token = jwt.sign(payload, JWT_SECRET);
   return { token, user: payload };
 }

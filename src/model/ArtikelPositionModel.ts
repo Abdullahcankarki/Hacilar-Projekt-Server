@@ -3,6 +3,8 @@ import mongoose, { Schema, Types, model } from "mongoose";
 export interface IArtikelPosition {
   artikel: Types.ObjectId; // Artikel-ID (Referenz zu Artikel)
   artikelName: string;
+  auftragId?: Types.ObjectId;
+  leergutVonPositionId?: Types.ObjectId;
   menge: number; // Menge des Artikels
   einheit: "kg" | "stück" | "kiste" | "karton"; // Einheit der Menge
   einzelpreis: number; // Kilopreis für den Kunden
@@ -36,6 +38,8 @@ export interface IArtikelPosition {
 const artikelPositionSchema = new Schema<IArtikelPosition>({
   artikel: { type: Schema.Types.ObjectId, ref: "Artikel" },
   artikelName: { type: String },
+  auftragId: { type: Schema.Types.ObjectId, ref: "Auftrag" },
+  leergutVonPositionId: { type: Schema.Types.ObjectId, ref: "ArtikelPosition" },
   menge: { type: Number },
   einheit: {
     type: String,

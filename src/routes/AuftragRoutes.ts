@@ -16,6 +16,7 @@ import {
   getTourInfosForAuftraege,
   createAuftragQuick,
   getBestellteArtikelAggregiert,
+  setAuftragInFertig,
 } from "../services/AuftragService"; // Passe den Pfad ggf. an
 import { LoginResource } from "../Resources"; // Passe den Pfad ggf. an
 
@@ -847,6 +848,21 @@ auftragRouter.put(
           .json({ error: "Nur Admin darf den Status umstellen" });
       }
       const result = await setAuftragInBearbeitung(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+auftragRouter.put(
+  "/:id/fertig",
+  authenticate,
+  [param("id").isMongoId().withMessage("Ungültige Auftrag-ID")],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await setAuftragInFertig(req.params.id);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

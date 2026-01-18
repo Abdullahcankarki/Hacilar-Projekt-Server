@@ -98,6 +98,7 @@ export type AuftragResource = {
 export type ArtikelPositionResource = {
   id?: string; // Eindeutige ID der Position
   artikel: string; // ID des Artikels (als String)
+  auftragId?: string;
   artikelName?: string;
   artikelNummer?: string;
   menge: number; // Menge des Artikels
@@ -124,6 +125,7 @@ export type ArtikelPositionResource = {
   nettogewicht?: number;
   chargennummern?: string[];
   erfassungsModus?: "GEWICHT" | "KARTON" | "STÜCK";
+  leergutVonPositionId?: string;
 };
 
 export type ArtikelResource = {

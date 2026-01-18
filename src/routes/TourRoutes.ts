@@ -6,6 +6,7 @@ import { DateTime } from "luxon";
 import {
   createTour,
   getTourById,
+  getToursByIds,
   listTours,
   updateTour,
   deleteTour,
@@ -164,6 +165,32 @@ tourRouter.get(
       const result = await getTourById(req.params.id);
       if (!result)
         return res.status(404).json({ error: "Tour nicht gefunden" });
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/* --------------------------- GET BY IDS --------------------------- */
+tourRouter.post(
+  "/by-ids",
+  authenticate,
+  [
+    body("ids")
+      .isArray({ min: 1 })
+      .withMessage("ids muss ein Array mit mindestens einem Element sein"),
+    body("ids.*")
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage("jede Tour-ID muss ein nicht-leerer String sein"),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const ids = (req.body?.ids || []) as string[];
+      const result = await getToursByIds(ids);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

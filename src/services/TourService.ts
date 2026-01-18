@@ -3,7 +3,6 @@ import mongoose, { FilterQuery, Types } from "mongoose";
 import { Tour } from "../model/TourModel";
 import { TourStop } from "../model/TourStopModel";
 import { Auftrag } from "../model/AuftragModel";
-import { Fahrzeug } from "../model/FahrzeugModel";
 import { recomputeTourWeight, updateOverCapacityFlag } from "./tour-hooksService"; // falls anderer Pfad: anpassen
 import { DateTime } from "luxon";
 import { TourResource, TourStatus } from "src/Resources";
@@ -130,6 +129,24 @@ export async function createTour(data: {
 export async function getTourById(id: string): Promise<TourResource | null> {
   const doc = await Tour.findById(id);
   return doc ? toResource(doc) : null;
+}
+
+/* ---------------------------------- GET ----------------------------------- */
+
+export async function getToursByIds(ids: string[]): Promise<TourResource[]> {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+
+  const objectIds = ids
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+
+  if (!objectIds.length) return [];
+
+  const docs = await Tour.find({
+    _id: { $in: objectIds },
+  });
+
+  return docs.map(toResource);
 }
 
 /* ---------------------------------- LIST ----------------------------------- */
