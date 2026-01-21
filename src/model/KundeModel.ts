@@ -10,6 +10,7 @@ export interface IKunde{
     createdAt: Date; // Erstellungsdatum
     updatedAt: Date; // Aktualisierungsdatum
     favoriten?: Types.ObjectId[];
+    bestimmteArtikel?: Types.ObjectId[];
     lieferzeit?: string;
     ustId?: string;
     handelsregisterNr?: string;
@@ -26,6 +27,8 @@ export interface IKunde{
     emailLieferschein?: string;
     emailBuchhaltung?: string;
     emailSpedition?: string;
+    // Fehlmengen-Benachrichtigung
+    fehlmengenBenachrichtigung?: boolean;
 }
 
 const kundeSchema = new Schema<IKunde>({
@@ -36,6 +39,7 @@ const kundeSchema = new Schema<IKunde>({
     adresse: { type: String, required: true },
     telefon: { type: String, required: false },
     favoriten: [{ type: Schema.Types.ObjectId, ref: "Artikel" }],
+    bestimmteArtikel: [{ type: Schema.Types.ObjectId, ref: "Artikel" }],
     lieferzeit: { type: String},
     ustId: { type: String },
     handelsregisterNr: { type: String },
@@ -52,6 +56,8 @@ const kundeSchema = new Schema<IKunde>({
     emailLieferschein: { type: String },
     emailBuchhaltung: { type: String },
     emailSpedition: { type: String },
+    // Fehlmengen-Benachrichtigung
+    fehlmengenBenachrichtigung: { type: Boolean, default: false },
   },
   { timestamps: true }
 )

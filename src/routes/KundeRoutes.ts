@@ -16,6 +16,7 @@ import {
   normalizeKundenEmails,
   approveKunde,
   getKundeAnalytics,
+  setBestimmteArtikel,
 } from '../services/KundeService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -270,6 +271,7 @@ kundeRouter.put(
     body('emailLieferschein').optional().isEmail().withMessage('Ungültige E-Mail für Lieferscheine'),
     body('emailBuchhaltung').optional().isEmail().withMessage('Ungültige E-Mail für Buchhaltung'),
     body('emailSpedition').optional().isEmail().withMessage('Ungültige E-Mail für Spedition'),
+    body('fehlmengenBenachrichtigung').optional().isBoolean().toBoolean(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
@@ -373,6 +375,39 @@ kundeRouter.patch(
       // Service aufrufen
       const count = await normalizeKundenEmails();
       res.json({ message: `E-Mail-Adressen normalisiert: ${count}` });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * PATCH /kunden/:id/bestimmte-artikel
+ * Setzt die erlaubten/bestimmten Artikel eines Kunden (nur Admin)
+ * Body: { artikelIds: string[] }
+ */
+kundeRouter.patch(
+  '/:id/bestimmte-artikel',
+  authenticate,
+  [
+    param('id').isMongoId().withMessage('Ungültige Kunden-ID'),
+    body('artikelIds')
+      .isArray()
+      .withMessage('artikelIds muss ein Array sein'),
+    body('artikelIds.*')
+      .isMongoId()
+      .withMessage('Ungültige Artikel-ID'),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const currentUser = req.user!;
+      const result = await setBestimmteArtikel(
+        req.params.id,
+        req.body.artikelIds,
+        currentUser
+      );
+      res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

@@ -12,7 +12,7 @@ export async function createKundenPreis(data: {
   customer: string;
   aufpreis: number;
 }, currentUser: { role: string[] }): Promise<KundenPreisResource> {
-  if (!currentUser.role.includes("admin")) {
+  if (!currentUser.role?.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
   const newEntry = new KundenPreisModel({
@@ -38,7 +38,7 @@ export async function setAufpreisByGesamtpreis(
   data: { artikel: string; customer: string; gesamtpreis: number },
   currentUser: { role: string[] }
 ): Promise<KundenPreisResource> {
-  if (!currentUser.role.includes("admin")) {
+  if (!currentUser.role?.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
 
@@ -141,7 +141,7 @@ export async function updateKundenPreis(
   data: Partial<{ artikel: string; customer: string; aufpreis: number; }>,
   currentUser: { role: string[] }
 ): Promise<KundenPreisResource> {
-  if (!currentUser.role.includes("admin")) {
+  if (!currentUser.role?.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
   const updated = await KundenPreisModel.findByIdAndUpdate(id, data, { new: true });
@@ -160,7 +160,7 @@ export async function updateKundenPreis(
  * Löscht einen kundenspezifischen Preis.
  */
 export async function deleteKundenPreis(id: string, currentUser: { role: string[] }): Promise<void> {
-  if (!currentUser.role.includes("admin")) {
+  if (!currentUser.role?.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
   const deleted = await KundenPreisModel.findByIdAndDelete(id);
@@ -179,7 +179,7 @@ export async function setAufpreisForArtikelByFilter(
   filter: { kategorie?: string; region?: string },
   currentUser: { role: string[] }
 ): Promise<KundenPreisResource[]> {
-  if (!currentUser.role.includes("admin")) {
+  if (!currentUser.role?.includes("admin")) {
     throw new Error("Admin-Zugriff erforderlich");
   }
   const query: any = {};
@@ -647,7 +647,7 @@ export async function bulkEditKundenpreiseForCustomerByArtikelFilter(
   },
   currentUser: { role: string[] }
 ): Promise<KundenPreisResource[]> {
-  if (!currentUser.role.includes('admin')) {
+  if (!currentUser.role?.includes('admin')) {
     throw new Error('Admin-Zugriff erforderlich');
   }
 
@@ -779,7 +779,7 @@ export async function bulkEditKundenpreiseForArtikelByKundenFilter(
   },
   currentUser: { role: string[] }
 ): Promise<KundenPreisResource[]> {
-  if (!currentUser.role.includes('admin')) {
+  if (!currentUser.role?.includes('admin')) {
     throw new Error('Admin-Zugriff erforderlich');
   }
 
@@ -886,4 +886,186 @@ export async function bulkEditKundenpreiseForArtikelByKundenFilter(
     customer: e.customer.toString(),
     aufpreis: e.aufpreis,
   }));
+}
+
+//  * Kunden-zentrierte Liste (Bestimmte Artikel): wie listKundenpreiseForCustomer(includeAllArticles=true),
+//  * aber auf die beim Kunden hinterlegten `bestimmteArtikel` eingeschränkt.
+//  *
+//  * Verhalten:
+//  *  - Wenn der Kunde keine `bestimmteArtikel` gesetzt hat (leer/undefined) → fällt auf listKundenpreiseForCustomer zurück.
+//  *  - Ansonsten werden nur diese Artikel gelistet; fehlende Kundenpreise → Aufpreis = 0 (id = 'default').
+//  
+export async function listArtikelPreisForCustomerBestimmteArtikel(options: {
+  customerId: string;
+  q?: string;
+  sort?: 'artikelNummer' | 'artikelName' | 'basispreis' | 'aufpreis' | 'effektivpreis';
+  order?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}): Promise<Array<{
+  id: string;
+  artikel: string;
+  artikelNummer?: string;
+  artikelName?: string;
+  einheit?: string;
+  basispreis: number;
+  aufpreis: number;
+  effektivpreis: number;
+}>> {
+  const {
+    customerId,
+    q,
+    sort = 'artikelName',
+    order = 'asc',
+    page = 1,
+    limit = 50,
+  } = options;
+
+  if (!customerId || !mongoose.Types.ObjectId.isValid(customerId)) {
+    throw new Error('Ungültige customerId');
+  }
+
+  // Kunde laden und bestimmteArtikel prüfen
+  const kunde = await Kunde.findById(customerId).select('bestimmteArtikel').lean();
+  if (!kunde) throw new Error('Kunde nicht gefunden');
+
+  const bestimmte = Array.isArray((kunde as any).bestimmteArtikel)
+    ? (kunde as any).bestimmteArtikel
+    : [];
+
+  // Keine Einschränkung gesetzt → Standardliste
+  if (!bestimmte || bestimmte.length === 0) {
+    return listKundenpreiseForCustomer({
+      customerId,
+      q,
+      sort,
+      order,
+      page,
+      limit,
+      includeAllArticles: true,
+    });
+  }
+
+  const sortDir = order === 'desc' ? -1 : 1;
+  const skip = Math.max(0, (page - 1) * limit);
+
+  const buildSortStage = () => {
+    switch (sort) {
+      case 'artikelNummer':
+        return { artikelNummer: sortDir } as Record<string, 1 | -1>;
+      case 'basispreis':
+        return { basispreis: sortDir };
+      case 'aufpreis':
+        return { aufpreis: sortDir };
+      case 'effektivpreis':
+        return { effektivpreis: sortDir };
+      case 'artikelName':
+      default:
+        return { artikelName: sortDir };
+    }
+  };
+
+  // Bestimmte Artikel IDs normalisieren
+  const bestimmteIds = (bestimmte as any[])
+    .map((x) => (typeof x === 'string' ? x : x?.toString?.()))
+    .filter(Boolean)
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  if (bestimmteIds.length === 0) {
+    // Falls Daten kaputt sind, lieber Standardliste statt leer
+    return listKundenpreiseForCustomer({
+      customerId,
+      q,
+      sort,
+      order,
+      page,
+      limit,
+      includeAllArticles: true,
+    });
+  }
+
+  const pipeline: any[] = [
+    // Nur bestimmte Artikel (und weiterhin kein Leergut)
+    {
+      $match: {
+        _id: { $in: bestimmteIds },
+        kategorie: { $ne: 'Leergut' },
+      },
+    },
+    // Optional: Suche auf Root-Feldern (nutzt Indexe auf name/nummer)
+    ...(q
+      ? [
+          {
+            $match: {
+              $or: [
+                { nummer: { $regex: q, $options: 'i' } },
+                { name: { $regex: q, $options: 'i' } },
+              ],
+            },
+          },
+        ]
+      : []),
+    // Normierung der Felder
+    {
+      $project: {
+        _id: 1,
+        artikelNummer: { $ifNull: ['$nummer', '$artikelNummer'] },
+        artikelName: { $ifNull: ['$name', '$artikelName'] },
+        einheit: 1,
+        basispreis: { $ifNull: ['$preis', 0] },
+      },
+    },
+    // Sortierung + Pagination VOR Lookup
+    { $sort: buildSortStage() },
+    { $skip: skip },
+    { $limit: limit },
+    // Lookup nur für die paginierten Zeilen
+    {
+      $lookup: {
+        from: KundenPreisModel.collection.name,
+        let: { aId: '$_id' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$artikel', '$$aId'] },
+                  { $eq: ['$customer', new mongoose.Types.ObjectId(customerId)] },
+                ],
+              },
+            },
+          },
+        ],
+        as: 'kp',
+      },
+    },
+    { $unwind: { path: '$kp', preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        aufpreis: { $ifNull: ['$kp.aufpreis', 0] },
+        kundenPreisId: { $ifNull: [{ $toString: '$kp._id' }, 'default'] },
+        effektivpreis: { $add: ['$basispreis', { $ifNull: ['$kp.aufpreis', 0] }] },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        id: '$kundenPreisId',
+        artikel: { $toString: '$_id' },
+        artikelNummer: 1,
+        artikelName: 1,
+        einheit: 1,
+        basispreis: { $ifNull: ['$basispreis', 0] },
+        aufpreis: { $ifNull: ['$aufpreis', 0] },
+        effektivpreis: { $ifNull: ['$effektivpreis', 0] },
+      },
+    },
+  ];
+
+  const rows = await ArtikelModel.aggregate(pipeline)
+    .collation({ locale: 'de', strength: 2, numericOrdering: true })
+    .exec();
+
+  return rows as any;
 }

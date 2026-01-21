@@ -11,6 +11,7 @@ import {
   getLetzterAuftragMitPositionenByKundenId,
   getLetzterArtikelFromAuftragByKundenId,
   deleteAllAuftraege,
+  deleteMultipleAuftraege,
   getAlleAuftraegeInBearbeitung,
   setAuftragInBearbeitung,
   getTourInfosForAuftraege,
@@ -881,6 +882,45 @@ auftragRouter.delete(
       }
       await deleteAllAuftraege();
       res.json({ message: "Auftrag gelöscht" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * DELETE /auftraege/multiple
+ * Löscht mehrere Aufträge basierend auf übergebenen IDs.
+ * Nur Admins dürfen diesen Vorgang ausführen.
+ * Body: { ids: string[] }
+ */
+auftragRouter.delete(
+  "/multiple",
+  authenticate,
+  [
+    body("ids")
+      .isArray({ min: 1 })
+      .withMessage("IDs müssen ein Array mit mindestens einem Eintrag sein"),
+    body("ids.*")
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage("Jede ID muss ein gültiger String sein")
+      .isMongoId()
+      .withMessage("Ungültige Auftrag-ID"),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user?.role.includes("admin")) {
+        return res.status(403).json({ error: "Zugriff verweigert" });
+      }
+      const { ids } = req.body;
+      await deleteMultipleAuftraege(ids);
+      res.json({
+        message: `${ids.length} Auftrag${ids.length === 1 ? '' : 'e'} gelöscht`,
+        deletedCount: ids.length
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

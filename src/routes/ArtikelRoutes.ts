@@ -11,6 +11,7 @@ import {
   getAllArtikelClean,
   getArtikelByIdClean,
   getArtikelAnalytics,
+  getBestimmteArtikelByKundenId,
 } from '../services/ArtikelService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -217,6 +218,50 @@ artikelRouter.get(
     }
   }
 );
+
+/**
+ * GET /artikel/bestimmte
+ * Liefert die für einen Kunden erlaubten/bestimmten Artikel.
+ * Query:
+ *   kunde (optional für Admin)
+ *   page, limit, kategorie, ausverkauft, name, erfassungsModus, sortBy, sortDir
+ */
+artikelRouter.get('/bestimmte', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const isAdminUser = req.user?.role.includes('admin');
+    const kundeId = isAdminUser
+      ? req.query.kunde?.toString() ?? req.user?.id
+      : req.user?.id;
+
+    if (!kundeId) {
+      return res.status(400).json({ error: 'Kunde nicht ermittelt' });
+    }
+
+    const page = req.query.page ? parseInt(String(req.query.page), 10) : undefined;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+    const kategorie = parseList(req.query.kategorie);
+    const ausverkauft = parseBool(req.query.ausverkauft);
+    const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+    const erfassungsModus = parseList(req.query.erfassungsModus);
+    const sortBy = typeof req.query.sortBy === 'string' ? req.query.sortBy as any : undefined;
+    const sortDir = typeof req.query.sortDir === 'string' ? req.query.sortDir as any : undefined;
+
+    const result = await getBestimmteArtikelByKundenId(kundeId, {
+      page,
+      limit,
+      kategorie: kategorie as any,
+      ausverkauft,
+      name,
+      erfassungsModus: erfassungsModus as any,
+      sortBy,
+      sortDir,
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 /**
  * GET /artikel

@@ -50,6 +50,8 @@ export type KundeResource = {
   emailLieferschein?: string;
   emailBuchhaltung?: string;
   emailSpedition?: string;
+  bestimmteArtikel?: string[]; // erlaubte/bestimmte Artikel (ObjectIds als Strings)
+  fehlmengenBenachrichtigung?: boolean; // Opt-in für Fehlmengen-Email
 };
 
 export type AuftragResource = {
@@ -163,7 +165,8 @@ export type BelegTyp =
   | "lieferschein"
   | "rechnung"
   | "gutschrift"
-  | "preisdifferenz";
+  | "preisdifferenz"
+  | "auftragsbestaetigung";
 
 export type BelegResource = {
   id?: string;

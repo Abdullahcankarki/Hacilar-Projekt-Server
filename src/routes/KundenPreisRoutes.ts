@@ -14,6 +14,7 @@ import {
   bulkEditKundenpreiseForCustomerByArtikelFilter,
   listKundenpreiseForArtikel,
   bulkEditKundenpreiseForArtikelByKundenFilter,
+  listArtikelPreisForCustomerBestimmteArtikel,
 } from '../services/KundenPreisService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
 
@@ -307,6 +308,35 @@ kundenPreisRouter.get(
         page: page ? parseInt(page as string, 10) : 1,
         limit: limit ? parseInt(limit as string, 10) : 50,
         includeAllArticles: includeAllArticles === 'true',
+      });
+
+      res.status(200).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /kundenpreise/customer/:customerId/bestimmte-artikel
+// Gibt eine kundenzentrierte Preisliste NUR für die beim Kunden hinterlegten bestimmten Artikel zurück
+kundenPreisRouter.get(
+  '/customer/:customerId/bestimmte-artikel',
+  authenticate,
+  isAdmin,
+  [param('customerId').isMongoId().withMessage('Ungültige Kunden-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { customerId } = req.params;
+      const { q, sort, order, page, limit } = req.query;
+
+      const result = await listArtikelPreisForCustomerBestimmteArtikel({
+        customerId,
+        q: q as string,
+        sort: sort as any,
+        order: order as any,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 50,
       });
 
       res.status(200).json(result);

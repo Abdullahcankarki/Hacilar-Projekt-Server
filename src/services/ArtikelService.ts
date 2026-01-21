@@ -187,17 +187,16 @@ export async function getAllArtikel(
     ];
   }
 
-  const totalDocsAll = await ArtikelModel.estimatedDocumentCount();
   const limit =
     options?.limit !== undefined
-      ? Math.max(1, Math.min(200, options.limit))
-      : totalDocsAll;
+      ? Math.max(1, Math.min(500, options.limit))
+      : 500;
   const total = await ArtikelModel.countDocuments(query);
   const pages = Math.max(1, Math.ceil(total / limit));
   const skip = (page - 1) * limit;
 
-  // Sortierung (Standard: nach Name aufsteigend)
-  let sort: any = { name: 1 };
+  // Sortierung (Standard: nach Kategorie, dann Name aufsteigend)
+  let sort: any = { kategorie: 1, name: 1 };
   if (options?.sortBy) {
     const dir = options.sortDir === "desc" ? -1 : 1;
     const field =
@@ -242,6 +241,133 @@ export async function getAllArtikel(
 }
 
 /**
+ * Liefert die "bestimmten/erlaubten" Artikel für einen Kunden.
+ * Wenn der Kunde keine bestimmtenArtikel gesetzt hat (leer/undefined),
+ * werden alle Artikel (wie getAllArtikel) zurückgegeben.
+ */
+export async function getBestimmteArtikelByKundenId(
+  kundenId: string,
+  options?: {
+    page?: number;
+    limit?: number;
+    kategorie?: string | string[];
+    ausverkauft?: boolean;
+    name?: string;
+    erfassungsModus?: string | string[];
+    sortBy?: "name" | "preis" | "kategorie" | "artikelNummer";
+    sortDir?: "asc" | "desc";
+  }
+): Promise<{
+  items: ArtikelResource[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+}> {
+  if (!kundenId || !Types.ObjectId.isValid(kundenId)) {
+    throw new Error("Ungültige Kunden-ID");
+  }
+
+  const kunde = await Kunde.findById(kundenId).lean();
+  if (!kunde) {
+    throw new Error("Kunde nicht gefunden");
+  }
+
+  const bestimmte = Array.isArray((kunde as any).bestimmteArtikel)
+    ? (kunde as any).bestimmteArtikel
+    : [];
+
+  // Wenn keine Einschränkung gesetzt ist -> alle Artikel wie gewohnt
+  if (!bestimmte || bestimmte.length === 0) {
+    return getAllArtikel(kundenId, options);
+  }
+
+  const page = Math.max(1, options?.page ?? 1);
+
+  // Build filter
+  const query: any = {};
+  query.kategorie = { $ne: "Leergut" };
+
+  // Nur erlaubte Artikel des Kunden
+  query._id = { $in: bestimmte };
+
+  if (options?.kategorie) {
+    if (Array.isArray(options.kategorie)) {
+      query.kategorie = { $in: options.kategorie };
+    } else {
+      const escapedKat = options.kategorie
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      query.kategorie = { $regex: escapedKat, $options: "i" };
+    }
+  }
+  if (typeof options?.ausverkauft === "boolean") {
+    query.ausverkauft = options.ausverkauft;
+  }
+  if (options?.erfassungsModus) {
+    query.erfassungsModus = Array.isArray(options.erfassungsModus)
+      ? { $in: options.erfassungsModus }
+      : options.erfassungsModus;
+  }
+  if (options?.name && options.name.trim().length > 0) {
+    const escaped = options.name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    query.$or = [
+      { name: { $regex: escaped, $options: "i" } },
+      { artikelNummer: { $regex: escaped, $options: "i" } },
+    ];
+  }
+
+  // Limit/Skip/Pages
+  const limit =
+    options?.limit !== undefined
+      ? Math.max(1, Math.min(500, options.limit))
+      : 500;
+
+  const total = await ArtikelModel.countDocuments(query);
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const skip = (page - 1) * limit;
+
+  // Sortierung (Standard: nach Kategorie, dann Name aufsteigend)
+  let sort: any = { kategorie: 1, name: 1 };
+  if (options?.sortBy) {
+    const dir = options.sortDir === "desc" ? -1 : 1;
+    const field =
+      options.sortBy === "artikelNummer"
+        ? "artikelNummer"
+        : options.sortBy === "preis"
+        ? "preis"
+        : options.sortBy === "kategorie"
+        ? "kategorie"
+        : "name";
+    sort = { [field]: dir };
+  }
+
+  const artikelList = await ArtikelModel.find(query)
+    .collation({ locale: "de", strength: 2 })
+    .sort(sort)
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  // Kunden-Aufpreise laden
+  const kundenPreise = await KundenPreisModel.find({
+    customer: new Types.ObjectId(kundenId),
+    artikel: { $in: artikelList.map((a) => a._id) },
+  }).lean();
+
+  const preisMap = new Map<string, number>(
+    kundenPreise.map((p) => [p.artikel.toHexString(), p.aufpreis])
+  );
+
+  const items = artikelList.map((a) => {
+    const aufpreis = preisMap.get(a._id.toString()) || 0;
+    return mapToArtikelResource(a, aufpreis);
+  });
+
+  return { items, page, limit, total, pages };
+}
+
+/**
  * Ruft einen Artikel ohne Aufpreis berechnung anhand der ID ab.
  */
 
@@ -278,11 +404,10 @@ export async function getAllArtikelClean(options?: {
 }> {
   const page = Math.max(1, options?.page ?? 1);
 
-  const totalDocsAll = await ArtikelModel.estimatedDocumentCount();
   const limit =
     options?.limit !== undefined
-      ? Math.max(1, Math.min(200, options.limit))
-      : totalDocsAll;
+      ? Math.max(1, Math.min(500, options.limit))
+      : 500;
 
   const query: any = {};
   if (options?.kategorie) {
@@ -315,8 +440,8 @@ export async function getAllArtikelClean(options?: {
   const pages = Math.max(1, Math.ceil(total / limit));
   const skip = (page - 1) * limit;
 
-  // Sortierung (Standard: nach Name aufsteigend)
-  let sort: any = { name: 1 };
+  // Sortierung (Standard: nach Kategorie, dann Name aufsteigend)
+  let sort: any = { kategorie: 1, name: 1 };
   if (options?.sortBy) {
     const dir = options.sortDir === "desc" ? -1 : 1;
     const field =

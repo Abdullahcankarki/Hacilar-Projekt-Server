@@ -75,31 +75,36 @@ function drawHeader(doc: PDFKitDocument, opts: { title: string; logoPath?: strin
 
   // Header base Y position
   const topY = 40;
+  // 4 cm nach links verschieben: ursprünglich Logo bei 50, jetzt bei 50 - 113 ≈ -63 → wir nutzen Seitenrand
+  // Stattdessen: alles kompakter, Logo ganz links am Rand
+  const logoX = 40;
+  const textStartX = 40; // Firmenname direkt unter/neben Logo
 
   // Draw logo (top left)
   const logoFile = logoPath && fs.existsSync(logoPath)
     ? logoPath
-    : path.join(__dirname, "../../assets/logo.png");
+    : path.join(__dirname, "../assets/logo.png");
 
   try {
     if (fs.existsSync(logoFile)) {
-      doc.image(logoFile, 50, topY, { width: 80 });
+      doc.image(logoFile, logoX, topY, { width: 80 });
     }
   } catch {
     // ignore if logo not found
   }
 
-  // Company info next to logo
+  // Company info next to logo (4 cm = 113pt nach links verschoben)
   const companyName = "Hacilar Helal Et Kombinasi";
   const companySub = "Türkische Fleischgrosshandels GmbH";
   const companyAddr = "Beusselstraße 44 · 10553 Berlin";
 
-  doc.font("Helvetica-Bold").fontSize(14).text(companyName, 150, topY + 5);
-  doc.font("Helvetica").fontSize(9).text(companySub, 150, topY + 22);
-  doc.fontSize(9).text(companyAddr, 150, topY + 36);
+  const companyTextX = logoX + 90; // direkt neben dem Logo
+  doc.font("Helvetica-Bold").fontSize(14).text(companyName, companyTextX, topY + 5);
+  doc.font("Helvetica").fontSize(9).text(companySub, companyTextX, topY + 22);
+  doc.fontSize(9).text(companyAddr, companyTextX, topY + 36);
 
-  // Title (right-aligned)
-  doc.font("Helvetica-Bold").fontSize(16).text(title.toUpperCase(), 400, topY + 10, { width: 150, align: "right" });
+  // Title (right-aligned, breitere Fläche für "AUFTRAGSBESTÄTIGUNG" in einer Zeile)
+  doc.font("Helvetica-Bold").fontSize(14).text(title.toUpperCase(), 350, topY + 10, { width: 210, align: "right" });
 
   // Bottom border line under header
   doc.moveTo(40, topY + 55).lineTo(570, topY + 55).strokeColor("#000").lineWidth(1).stroke();
@@ -209,7 +214,8 @@ async function resolveArtikelPositionen(auftrag: any): Promise<ArtikelPositionRe
 }
 
 // Renders the Artikelpositionen-Tabelle (positions table) for Rechnung/Lieferschein
-function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionResource[], mwstSatz?: number, kunde?: any, auftrag?: any) {
+function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionResource[], mwstSatz?: number, kunde?: any, auftrag?: any, options?: { hideSignatures?: boolean }) {
+  const { hideSignatures = false } = options || {};
   // === Page region (cm → pt) ===
   const CM = 28.3464567; // 1 cm ≈ 28.3465 pt
   const areaTop = 8.5 * CM;     // 8.5 cm from top
@@ -429,17 +435,19 @@ function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionReso
   doc.font("Helvetica");
 
   // Signature boxes placed above totals, inside region (final page)
-  const SIG_TOP = TOTALS_TOP - sigGap - sigHeight;
-  const SIG_WIDTH = Math.min(220, regionWidth / 2 - 10);
-  const SIG_LEFT_X = regionLeft;
-  const SIG_RIGHT_X = regionLeft + regionWidth / 2 + 10;
+  if (!hideSignatures) {
+    const SIG_TOP = TOTALS_TOP - sigGap - sigHeight;
+    const SIG_WIDTH = Math.min(220, regionWidth / 2 - 10);
+    const SIG_LEFT_X = regionLeft;
+    const SIG_RIGHT_X = regionLeft + regionWidth / 2 + 10;
 
-  doc.font("Helvetica-Bold").fontSize(9).text("UNTERSCHRIFT KUNDE", SIG_LEFT_X, SIG_TOP - 14, { width: SIG_WIDTH });
-  doc.font("Helvetica-Bold").fontSize(9).text("UNTERSCHRIFT MITARBEITER", SIG_RIGHT_X, SIG_TOP - 14, { width: SIG_WIDTH });
+    doc.font("Helvetica-Bold").fontSize(9).text("UNTERSCHRIFT KUNDE", SIG_LEFT_X, SIG_TOP - 14, { width: SIG_WIDTH });
+    doc.font("Helvetica-Bold").fontSize(9).text("UNTERSCHRIFT MITARBEITER", SIG_RIGHT_X, SIG_TOP - 14, { width: SIG_WIDTH });
 
-  doc.lineWidth(0.8).strokeColor('#000')
-    .rect(SIG_LEFT_X, SIG_TOP, SIG_WIDTH, sigHeight).stroke()
-    .rect(SIG_RIGHT_X, SIG_TOP, SIG_WIDTH, sigHeight).stroke();
+    doc.lineWidth(0.8).strokeColor('#000')
+      .rect(SIG_LEFT_X, SIG_TOP, SIG_WIDTH, sigHeight).stroke()
+      .rect(SIG_RIGHT_X, SIG_TOP, SIG_WIDTH, sigHeight).stroke();
+  }
 }
 
 function drawAddresses(doc: PDFKitDocument, kunde: any, firma: { name?: string; adresse?: string } = {}) {
@@ -626,10 +634,16 @@ export async function generateBelegPdf(
   const buffers: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => buffers.push(chunk));
 
-  // === Header + Footer (ohne weitere Inhalte) ===
+  // === Header für Auftragsbestätigung ===
+  if (belegTyp === 'auftragsbestaetigung') {
+    drawHeader(doc, { title: "Auftragsbestätigung" });
+  }
+
+  // === Rechnungskopf (Kundeninfos) ===
   drawRechnungskopf(doc, kunde, auftrag);
-  // Body: Artikelpositionen-Tabelle (Rechnung & Lieferschein)
-  if (belegTyp === 'rechnung' || belegTyp === 'lieferschein') {
+
+  // Body: Artikelpositionen-Tabelle (Rechnung, Lieferschein, Auftragsbestätigung)
+  if (belegTyp === 'rechnung' || belegTyp === 'lieferschein' || belegTyp === 'auftragsbestaetigung') {
     const raw = Array.isArray(auftrag.artikelPosition) ? (auftrag.artikelPosition as any[]) : [];
     const ids = raw.map((p: any) => toIdString(p)).filter(Boolean) as string[];
     dlog('normalized position ids:', ids);
@@ -656,7 +670,9 @@ export async function generateBelegPdf(
 
     const mwstSatz = (auftrag as any).mwstSatz ?? 7;
     dlog('mwstSatz used:', mwstSatz);
-    drawPositionsTable(doc, positionen, mwstSatz, kunde, auftrag);
+    // Auftragsbestätigung: keine Unterschriftsfelder
+    const hideSignatures = belegTyp === 'auftragsbestaetigung';
+    drawPositionsTable(doc, positionen, mwstSatz, kunde, auftrag, { hideSignatures });
   }
 
 

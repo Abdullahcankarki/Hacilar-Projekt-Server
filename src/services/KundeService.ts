@@ -39,6 +39,8 @@ function mapKundeToResource(k: any): KundeResource {
     emailLieferschein: k.emailLieferschein,
     emailBuchhaltung: k.emailBuchhaltung,
     emailSpedition: k.emailSpedition,
+    bestimmteArtikel: Array.isArray(k.bestimmteArtikel) ? k.bestimmteArtikel.map((a: any) => a.toString()) : undefined,
+    fehlmengenBenachrichtigung: k.fehlmengenBenachrichtigung,
     updatedAt: k.updatedAt?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -308,6 +310,7 @@ export async function updateKunde(
     emailLieferschein?: string;
     emailBuchhaltung?: string;
     emailSpedition?: string;
+    fehlmengenBenachrichtigung?: boolean;
   }>,
   currentUser: LoginResource
 ): Promise<KundeResource> {
@@ -355,6 +358,7 @@ export async function updateKunde(
   if (data.emailLieferschein !== undefined) updateData.emailLieferschein = data.emailLieferschein?.trim();
   if (data.emailBuchhaltung !== undefined) updateData.emailBuchhaltung = data.emailBuchhaltung?.trim();
   if (data.emailSpedition !== undefined) updateData.emailSpedition = data.emailSpedition?.trim();
+  if (data.fehlmengenBenachrichtigung !== undefined) updateData.fehlmengenBenachrichtigung = data.fehlmengenBenachrichtigung;
 
   // Passwort ändern (optional)
   if (data.password) {
@@ -501,6 +505,43 @@ export async function getKundenFavoriten(
   }
 
   return kunde.favoriten?.map((f) => f.toString()) || [];
+}
+
+export async function setBestimmteArtikel(
+  kundenId: string,
+  artikelIds: string[] | undefined,
+  currentUser: LoginResource
+): Promise<KundeResource> {
+  if (!currentUser.role.includes("admin")) {
+    throw new Error("Admin-Zugriff erforderlich");
+  }
+
+  if (!kundenId) throw new Error("kundenId ist erforderlich");
+
+  const kunde = await Kunde.findById(kundenId);
+  if (!kunde) {
+    throw new Error("Kunde nicht gefunden");
+  }
+
+  // Normalisieren: nur gültige ObjectIds, Duplikate entfernen
+  const ids = (artikelIds || [])
+    .map((id) => (id || "").trim())
+    .filter((id) => !!id);
+
+  const uniqueIds = Array.from(new Set(ids));
+
+  const objectIds: Types.ObjectId[] = [];
+  for (const id of uniqueIds) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new Error("Ungültige Artikel-ID: " + id);
+    }
+    objectIds.push(new Types.ObjectId(id));
+  }
+
+  (kunde as any).bestimmteArtikel = objectIds;
+  await kunde.save();
+
+  return mapKundeToResource(kunde);
 }
 
 export async function addKundenFavorit(

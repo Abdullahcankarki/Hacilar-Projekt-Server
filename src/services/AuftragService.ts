@@ -27,6 +27,8 @@ import { Fahrzeug } from "../model/FahrzeugModel";
 import { ReservierungModel } from "../model/ReservierungModel";
 import { createReservierung, updateReservierung, cancelReservierung, listReservierungen } from "./inventory/ReservierungsService";
 import { BestandAggModel } from "../model/BestandsAggModel";
+import { sendAuftragseingangEmail } from "./EmailService";
+import { generateBelegPdf } from "./BelegService";
 
 const ZONE = "Europe/Berlin" as const;
 const DEBUG_BESTELLTE = process.env.DEBUG_BESTELLTE_ARTIKEL === "1";
@@ -285,8 +287,8 @@ export async function createAuftrag(data: {
 }): Promise<AuftragResource> {
   const neueNummer = await generiereAuftragsnummer();
   const parsedLieferdatumCreate = parseBerlinYmdToUtcDate(data.lieferdatum);
-  // Kunde-Name denormalisiert mitschreiben
-  const kdoc = await Kunde.findById(data.kunde, { name: 1 }).lean();
+  // Kunde-Daten laden (Name + Email)
+  const kdoc = await Kunde.findById(data.kunde, { name: 1, email: 1 }).lean();
   const newAuftrag = new Auftrag({
     auftragsnummer: neueNummer,
     kunde: data.kunde,
@@ -322,6 +324,7 @@ export async function createAuftrag(data: {
     );
   } catch (e) {
   }
+
   return convertAuftragToResource(savedAuftrag, totals);
 }
 
@@ -618,6 +621,9 @@ export async function updateAuftrag(
     data.lieferdatum !== undefined &&
     !datesEqual(prevLieferdatum, newLieferdatum);
 
+  // Prüfen ob Lieferdatum zum ERSTEN Mal gesetzt wird (für Email-Versand)
+  const lieferdatumErstmalsGesetzt = !prevLieferdatum && newLieferdatum;
+
   if (lieferdatumWurdeGeaendert) {
     try {
       if (!prevHasTour) {
@@ -629,6 +635,37 @@ export async function updateAuftrag(
         await onAuftragDatumOderRegionGeaendert(updatedAuftrag._id.toString());
       }
     } catch (err) {
+    }
+
+    // Auftragsbestätigung-Email senden, wenn Lieferdatum erstmals gesetzt wird
+    if (lieferdatumErstmalsGesetzt) {
+      try {
+        // Kundendaten laden
+        const kundeDoc = await Kunde.findById(updatedAuftrag.kunde, { name: 1, email: 1 }).lean();
+        if (kundeDoc?.email) {
+          // PDF-Auftragsbestätigung generieren (nutzt bestehende Beleg-Funktion)
+          const pdfBuffer = await generateBelegPdf(updatedAuftrag._id.toString(), "auftragsbestaetigung");
+
+          const bestellDatum = updatedAuftrag.createdAt
+            ? DateTime.fromJSDate(new Date(updatedAuftrag.createdAt)).setZone(ZONE).toFormat("dd.MM.yyyy")
+            : DateTime.now().setZone(ZONE).toFormat("dd.MM.yyyy");
+          const lieferDatumFormatted = newLieferdatum
+            ? DateTime.fromJSDate(newLieferdatum).setZone(ZONE).toFormat("dd.MM.yyyy")
+            : undefined;
+
+          await sendAuftragseingangEmail({
+            kundenEmail: kundeDoc.email,
+            kundenName: kundeDoc.name || "Kunde",
+            auftragId: updatedAuftrag._id.toString(),
+            auftragNummer: updatedAuftrag.auftragsnummer,
+            bestellDatum,
+            lieferDatum: lieferDatumFormatted,
+            pdfBuffer,
+          });
+        }
+      } catch (emailErr) {
+        console.error("[MAIL] Auftragsbestätigung-Email konnte nicht gesendet werden:", emailErr);
+      }
     }
   }
 
@@ -790,6 +827,67 @@ export async function deleteAuftrag(id: string): Promise<void> {
       await Auftrag.deleteOne({ _id: auftrag._id }).session(session);
       // 4) Zugehörige Reservierungen stornieren
       await ReservierungModel.updateMany({ auftragId: auftrag._id, status: "AKTIV" }, { $set: { status: "AUFGELOEST" } }).session(session);
+    });
+  } finally {
+    await session.endSession();
+  }
+}
+
+/**
+ * Löscht mehrere Aufträge basierend auf übergebenen IDs.
+ * Entfernt auch abhängige ArtikelPositionen, TourStops und storniert Reservierungen.
+ */
+export async function deleteMultipleAuftraege(ids: string[]): Promise<void> {
+  if (!ids || ids.length === 0) {
+    throw new Error("Keine IDs angegeben");
+  }
+
+  // Validiere alle IDs
+  const invalidIds = ids.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+  if (invalidIds.length > 0) {
+    throw new Error(`Ungültige IDs: ${invalidIds.join(", ")}`);
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Lade alle Aufträge
+      const auftraege = await Auftrag.find({ _id: { $in: ids } })
+        .select("_id artikelPosition")
+        .session(session);
+
+      if (auftraege.length === 0) {
+        throw new Error("Keine Aufträge mit den angegebenen IDs gefunden");
+      }
+
+      // 1) TourStops für jeden Auftrag entfernen
+      for (const auftrag of auftraege) {
+        await removeAllStopsForAuftrag(auftrag._id, session);
+      }
+
+      // 2) Alle ArtikelPositionen und Zerlegeaufträge sammeln und löschen
+      const alleArtikelPositionen = auftraege.flatMap(
+        (a) => a.artikelPosition ?? []
+      );
+
+      if (alleArtikelPositionen.length > 0) {
+        await ArtikelPosition.deleteMany({
+          _id: { $in: alleArtikelPositionen },
+        }).session(session);
+
+        await ZerlegeAuftragModel.deleteMany({
+          "artikelPositionen.artikelPositionId": { $in: alleArtikelPositionen },
+        }).session(session);
+      }
+
+      // 3) Aufträge löschen
+      await Auftrag.deleteMany({ _id: { $in: ids } }).session(session);
+
+      // 4) Reservierungen stornieren
+      await ReservierungModel.updateMany(
+        { auftragId: { $in: ids }, status: "AKTIV" },
+        { $set: { status: "AUFGELOEST" } }
+      ).session(session);
     });
   } finally {
     await session.endSession();
@@ -1230,6 +1328,7 @@ export type GetBestellteArtikelParams = {
   // Artikel
   artikelNr?: string;       // contains (i) — Artikel.artikelNummer
   artikelName?: string;     // contains (i)
+  artikelKategorie: string;
 
   // Auftrag-Status (optional; wenn leer → alle)
   statusIn?: Array<"offen" | "in Bearbeitung" | "abgeschlossen" | "storniert">;
@@ -1248,6 +1347,7 @@ export type BestellteArtikelAggRow = {
   artikelId: string;
   artikelName?: string;
   artikelNummer?: string;
+  artikelKategorie?: string;
   mengeSum: number;
   einheit?: string;
 };
@@ -1374,6 +1474,7 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
         artikelId: "$artikelDoc._id",
         artikelName: "$artikelDoc.name",
         artikelNummer: "$artikelDoc.artikelNummer",
+        artikelKategorie: "$artikelDoc.kategorie",
         einheit: "$einheit",
         kundeId: "$auftrag.kunde",
         kundeName: { $ifNull: ["$auftrag.kundeName", "$kundeDoc.name"] },
@@ -1408,6 +1509,7 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
         _id: groupId,
         artikelName: { $first: "$artikelName" },
         artikelNummer: { $first: "$artikelNummer" },
+        artikelKategorie: { $first: "$artikelKategorie" },
         mengeSum: { $sum: "$menge" },
         einheit: { $first: "$einheit" },
       },
@@ -1418,6 +1520,7 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
         artikelId: { $toString: "$_id.artikelId" },
         artikelName: 1,
         artikelNummer: 1,
+        artikelKategorie: 1,
         mengeSum: 1,
         einheit: 1,
       },
@@ -1461,6 +1564,7 @@ export async function getBestellteArtikelAggregiert(params: GetBestellteArtikelP
       artikelId: r.artikelId,
       artikelName: r.artikelName,
       artikelNummer: r.artikelNummer,
+      artikelKategorie: r.artikelKategorie,
       mengeSum: Number(r.mengeSum || 0),
       einheit: r.einheit,
     };

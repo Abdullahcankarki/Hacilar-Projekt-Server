@@ -12,6 +12,7 @@ import { BewegungModel } from "../model/BewegungsModel";
 import { BestandAggModel } from "../model/BestandsAggModel";
 import { ChargeModel } from "../model/ChargeModel";
 import type { Lagerbereich } from "../Resources";
+import { hasFehlmenge, registerFehlmenge, removeFehlmenge } from "./FehlmengenScheduler";
 
 // ... Importe bleiben gleich
 
@@ -897,6 +898,34 @@ export async function updateArtikelPositionKommissionierung(
   // In allen anderen Fällen: diese Felder NICHT ändern (ignorieren)
 
   const updated = await position.save();
+
+  // --- Fehlmengen-Prüfung ---
+  // Prüfe ob eine Fehlmenge vorliegt (30% Abweichung)
+  if (auftrag && updated.auftragId) {
+    const bestellteMenge = updated.menge;
+    // Gelieferte Menge: Nettogewicht oder kommissioniertMenge
+    const gelieferteMenge = updated.nettogewicht ?? updated.kommissioniertMenge ?? bestellteMenge;
+
+    // Nur prüfen wenn überhaupt eine Menge erfasst wurde
+    if (typeof gelieferteMenge === "number" && gelieferteMenge >= 0) {
+      const einheit = updated.kommissioniertEinheit || updated.einheit || "kg";
+
+      if (hasFehlmenge(bestellteMenge, gelieferteMenge)) {
+        // Fehlmenge registrieren (Timer startet/resettet)
+        registerFehlmenge(
+          updated.auftragId.toString(),
+          updated._id.toString(),
+          updated.artikelName || "Unbekannter Artikel",
+          bestellteMenge,
+          gelieferteMenge,
+          einheit
+        ).catch(err => console.error("[Fehlmengen] Fehler beim Registrieren:", err));
+      } else {
+        // Keine Fehlmenge mehr → aus der Liste entfernen
+        removeFehlmenge(updated.auftragId.toString(), updated._id.toString());
+      }
+    }
+  }
 
   return {
     id: updated._id.toString(),
