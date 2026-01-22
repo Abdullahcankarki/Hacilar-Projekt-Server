@@ -418,20 +418,36 @@ function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionReso
   let ty = TOTALS_TOP + 8;
   const labelX = regionLeft;
   const valX = regionRight;
+
+  // Prüfe ob Kunde in Deutschland ist (MwSt nur für deutsche Kunden)
+  const kundeLand = (kunde?.land || "Deutschland").toLowerCase().trim();
+  const isDeutschland = kundeLand === "deutschland" || kundeLand === "germany" || kundeLand === "de";
+
   doc.font("Helvetica").fontSize(10).text("Nettobetrag", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
   doc.text(euro(sumNetto), valX - 100, ty, { width: 100, align: 'right' });
   ty += lineH2;
-  const mwstSatzVal = typeof mwstSatz === 'number' ? mwstSatz : 7;
-  const mwst = sumNetto * (mwstSatzVal / 100);
-  const brutto = sumNetto + mwst;
-  doc.text(`+ ${mwstSatzVal}% MwSt.`, labelX, ty, { width: regionWidth * 0.6, align: 'left' });
-  doc.text(euro(mwst), valX - 100, ty, { width: 100, align: 'right' });
-  ty += lineH2;
-  doc.text("Summe MWST", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
-  doc.text(euro(mwst), valX - 100, ty, { width: 100, align: 'right' });
-  ty += lineH2;
-  doc.font("Helvetica-Bold").text("Gesamtbetrag", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
-  doc.text(euro(brutto), valX - 100, ty, { width: 100, align: 'right' });
+
+  if (isDeutschland) {
+    // MwSt für deutsche Kunden
+    const mwstSatzVal = typeof mwstSatz === 'number' ? mwstSatz : 7;
+    const mwst = sumNetto * (mwstSatzVal / 100);
+    const brutto = sumNetto + mwst;
+    doc.text(`+ ${mwstSatzVal}% MwSt.`, labelX, ty, { width: regionWidth * 0.6, align: 'left' });
+    doc.text(euro(mwst), valX - 100, ty, { width: 100, align: 'right' });
+    ty += lineH2;
+    doc.text("Summe MWST", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
+    doc.text(euro(mwst), valX - 100, ty, { width: 100, align: 'right' });
+    ty += lineH2;
+    doc.font("Helvetica-Bold").text("Gesamtbetrag", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
+    doc.text(euro(brutto), valX - 100, ty, { width: 100, align: 'right' });
+  } else {
+    // Keine MwSt für ausländische Kunden (steuerfreie Lieferung)
+    doc.text("MwSt. 0% (steuerfreie Lieferung)", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
+    doc.text(euro(0), valX - 100, ty, { width: 100, align: 'right' });
+    ty += lineH2;
+    doc.font("Helvetica-Bold").text("Gesamtbetrag", labelX, ty, { width: regionWidth * 0.6, align: 'left' });
+    doc.text(euro(sumNetto), valX - 100, ty, { width: 100, align: 'right' });
+  }
   doc.font("Helvetica");
 
   // Signature boxes placed above totals, inside region (final page)

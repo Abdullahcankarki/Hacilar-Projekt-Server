@@ -23,6 +23,7 @@ function mapKundeToResource(k: any): KundeResource {
     kundenNummer: k.kundenNummer,
     email: k.email,
     adresse: k.adresse,
+    land: k.land || "Deutschland",
     telefon: k.telefon,
     lieferzeit: k.lieferzeit,
     ustId: k.ustId,
@@ -135,6 +136,7 @@ export async function createKunde(data: {
   password: string;
   email: string;
   adresse: string;
+  land?: string;
   telefon?: string;
   lieferzeit?: string;
   ustId?: string;
@@ -147,6 +149,7 @@ export async function createKunde(data: {
   emailLieferschein?: string;
   emailBuchhaltung?: string;
   emailSpedition?: string;
+  fehlmengenBenachrichtigung?: boolean;
 }): Promise<KundeResource> {
   const email = normalizeEmail(data.email);
   if (!email) throw new Error("E-Mail ist erforderlich");
@@ -166,6 +169,7 @@ export async function createKunde(data: {
     password: hashedPassword,
     email,
     adresse: (data.adresse || "").trim(),
+    land: (data.land || "Deutschland").trim(),
     telefon: data.telefon?.trim(),
     lieferzeit: data.lieferzeit?.trim(),
     ustId: data.ustId?.trim(),
@@ -179,6 +183,7 @@ export async function createKunde(data: {
     emailLieferschein: data.emailLieferschein?.trim(),
     emailBuchhaltung: data.emailBuchhaltung?.trim(),
     emailSpedition: data.emailSpedition?.trim(),
+    fehlmengenBenachrichtigung: data.fehlmengenBenachrichtigung ?? false,
   });
   const saved = await newKunde.save();
   return mapKundeToResource(saved);
@@ -294,6 +299,7 @@ export async function updateKunde(
     password: string;
     email: string;
     adresse: string;
+    land: string;
     telefon: string;
     lieferzeit: string;
     ustId: string;
@@ -343,6 +349,7 @@ export async function updateKunde(
 
   if (data.name !== undefined) updateData.name = (data.name || "").trim();
   if (data.adresse !== undefined) updateData.adresse = (data.adresse || "").trim();
+  if (data.land !== undefined) updateData.land = (data.land || "Deutschland").trim();
   if (data.telefon !== undefined) updateData.telefon = data.telefon?.trim();
   if (data.lieferzeit !== undefined) updateData.lieferzeit = data.lieferzeit?.trim();
   if (data.ustId !== undefined) updateData.ustId = data.ustId?.trim();

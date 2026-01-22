@@ -6,6 +6,7 @@ export interface IKunde{
     password: string //Password
     email: string; // E-Mail des Kunden
     adresse: string; // Adresse des Kunden
+    land?: string; // Land des Kunden (für MwSt-Berechnung, Standard: "Deutschland")
     telefon?: string; // Telefonnummer des Kunden
     createdAt: Date; // Erstellungsdatum
     updatedAt: Date; // Aktualisierungsdatum
@@ -37,6 +38,7 @@ const kundeSchema = new Schema<IKunde>({
     password: {type: String, required: true},
     email: { type: String, required: true, unique: true },
     adresse: { type: String, required: true },
+    land: { type: String, default: "Deutschland" }, // Standard: Deutschland
     telefon: { type: String, required: false },
     favoriten: [{ type: Schema.Types.ObjectId, ref: "Artikel" }],
     bestimmteArtikel: [{ type: Schema.Types.ObjectId, ref: "Artikel" }],
