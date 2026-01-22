@@ -634,9 +634,11 @@ export async function generateBelegPdf(
   const buffers: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => buffers.push(chunk));
 
-  // === Header für Auftragsbestätigung ===
+  // === Header für Auftragsbestätigung und Lieferschein ===
   if (belegTyp === 'auftragsbestaetigung') {
     drawHeader(doc, { title: "Auftragsbestätigung" });
+  } else if (belegTyp === 'lieferschein') {
+    drawHeader(doc, { title: "Lieferschein" });
   }
 
   // === Rechnungskopf (Kundeninfos) ===
@@ -652,6 +654,11 @@ export async function generateBelegPdf(
     for (const id of ids) {
       try {
         const pos = await getArtikelPositionById(id);
+        // Leergut-Positionen ausschließen (haben leergutVonPositionId gesetzt)
+        if (pos.leergutVonPositionId) {
+          dlog('position skipped (Leergut)', id);
+          continue;
+        }
         positionen.push(pos);
         dlog('position fetched', id, {
           artikel: pos.artikel,

@@ -288,6 +288,7 @@ export type TourStopResource = {
     gewichtKg?: number;
   }[];
 
+  bemerkung?: string;         // Anweisungen/Bemerkungen für Fahrer (Talimat)
   abgeschlossenAm?: string;
   updatedAt?: string;
 };

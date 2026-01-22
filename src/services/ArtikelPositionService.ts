@@ -906,12 +906,26 @@ export async function updateArtikelPositionKommissionierung(
     // Gelieferte Menge: Nettogewicht oder kommissioniertMenge
     const gelieferteMenge = updated.nettogewicht ?? updated.kommissioniertMenge ?? bestellteMenge;
 
+    console.log("[Fehlmengen] Prüfung:", {
+      auftragId: updated.auftragId.toString(),
+      positionId: updated._id.toString(),
+      artikelName: updated.artikelName,
+      bestellteMenge,
+      gelieferteMenge,
+      nettogewicht: updated.nettogewicht,
+      kommissioniertMenge: updated.kommissioniertMenge,
+    });
+
     // Nur prüfen wenn überhaupt eine Menge erfasst wurde
     if (typeof gelieferteMenge === "number" && gelieferteMenge >= 0) {
       const einheit = updated.kommissioniertEinheit || updated.einheit || "kg";
+      const istFehlmenge = hasFehlmenge(bestellteMenge, gelieferteMenge);
 
-      if (hasFehlmenge(bestellteMenge, gelieferteMenge)) {
+      console.log("[Fehlmengen] hasFehlmenge:", istFehlmenge, "Differenz:", bestellteMenge - gelieferteMenge, "Prozent:", ((bestellteMenge - gelieferteMenge) / bestellteMenge * 100).toFixed(1) + "%");
+
+      if (istFehlmenge) {
         // Fehlmenge registrieren (Timer startet/resettet)
+        console.log("[Fehlmengen] Registriere Fehlmenge für Auftrag:", updated.auftragId.toString());
         registerFehlmenge(
           updated.auftragId.toString(),
           updated._id.toString(),

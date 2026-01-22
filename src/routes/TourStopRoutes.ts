@@ -32,6 +32,7 @@ async function canEditStop(req: AuthRequest, res: Response, next: Function) {
         "signedByName",
         "leergutMitnahme",
         "abgeschlossenAm",
+        "bemerkung",
       ];
       return next();
     }
@@ -230,6 +231,7 @@ tourStopRouter.patch(
         "signedByName",
         "leergutMitnahme",
         "abgeschlossenAm",
+        "bemerkung",
       ];
       const allowed: string[] = (req as any).allowedFieldsForRole || fallbackAllowed;
       const keys = Object.keys(value);
@@ -256,6 +258,7 @@ tourStopRouter.patch(
     body("leergutMitnahme.*.anzahl").optional().isNumeric().toFloat(),
     body("leergutMitnahme.*.gewichtKg").optional().isNumeric().toFloat(),
     body("abgeschlossenAm").optional().isString().trim(),
+    body("bemerkung").optional().isString().trim(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {

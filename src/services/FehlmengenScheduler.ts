@@ -25,10 +25,14 @@ interface FehlmengenEntry {
   }>;
 }
 
-const pendingNotifications = new Map<string, FehlmengenEntry>();
+interface FehlmengenEntryWithMeta extends FehlmengenEntry {
+  startedAt: number; // Timestamp wann Timer gestartet wurde
+}
 
-// Verzögerung: 1 Stunde in Millisekunden
-const DELAY_MS = 60 * 60 * 1000; // 1 Stunde
+const pendingNotifications = new Map<string, FehlmengenEntryWithMeta>();
+
+// Verzögerung: 1 Minute für Tests (später auf 60 * 60 * 1000 für 1 Stunde ändern)
+const DELAY_MS = 60 * 60 * 1000; // 1 Minute (Test)
 
 /**
  * Prüft ob eine Fehlmenge vorliegt (30% Abweichung)
@@ -59,13 +63,23 @@ export async function registerFehlmenge(
 
   // Prüfe ob Auftrag existiert und Kunde die Benachrichtigung aktiviert hat
   const auftrag = await Auftrag.findById(auftragId);
-  if (!auftrag) return;
+  if (!auftrag) {
+    console.log("[Fehlmengen] Auftrag nicht gefunden:", auftragId);
+    return;
+  }
 
   const kunde = await Kunde.findById(auftrag.kunde);
-  if (!kunde) return;
+  if (!kunde) {
+    console.log("[Fehlmengen] Kunde nicht gefunden für Auftrag:", auftragId);
+    return;
+  }
 
   // Prüfe ob Kunde die Fehlmengen-Benachrichtigung aktiviert hat
-  if (!kunde.fehlmengenBenachrichtigung) return;
+  console.log("[Fehlmengen] Kunde:", kunde.name, "fehlmengenBenachrichtigung:", kunde.fehlmengenBenachrichtigung);
+  if (!kunde.fehlmengenBenachrichtigung) {
+    console.log("[Fehlmengen] Kunde hat Fehlmengen-Benachrichtigung nicht aktiviert");
+    return;
+  }
 
   const positionData = {
     positionId,
@@ -91,14 +105,18 @@ export async function registerFehlmenge(
 
     // Neuen Timer starten
     existing.timer = setTimeout(() => sendFehlmengenNotification(auftragId), DELAY_MS);
+    existing.startedAt = Date.now();
   } else {
     // Neuen Eintrag erstellen
     const timer = setTimeout(() => sendFehlmengenNotification(auftragId), DELAY_MS);
     pendingNotifications.set(auftragId, {
       timer,
       positionen: [positionData],
+      startedAt: Date.now(),
     });
+    console.log("[Fehlmengen] Neuer Timer gestartet für Auftrag:", auftragId, "Delay:", DELAY_MS, "ms");
   }
+  console.log("[Fehlmengen] Anzahl ausstehender Timer:", pendingNotifications.size);
 }
 
 /**
@@ -176,6 +194,72 @@ async function sendFehlmengenNotification(auftragId: string): Promise<void> {
  */
 export function getPendingCount(): number {
   return pendingNotifications.size;
+}
+
+/**
+ * Gibt den Timer-Status für einen Auftrag zurück
+ */
+export function getFehlmengenStatus(auftragId: string): {
+  hasPending: boolean;
+  remainingMs?: number;
+  positionen?: Array<{
+    artikelName: string;
+    bestellteMenge: number;
+    gelieferteMenge: number;
+    einheit: string;
+    differenz: number;
+  }>;
+} {
+  const entry = pendingNotifications.get(auftragId);
+  if (!entry) {
+    return { hasPending: false };
+  }
+
+  const elapsed = Date.now() - entry.startedAt;
+  const remainingMs = Math.max(0, DELAY_MS - elapsed);
+
+  return {
+    hasPending: true,
+    remainingMs,
+    positionen: entry.positionen.map(p => ({
+      artikelName: p.artikelName,
+      bestellteMenge: p.bestellteMenge,
+      gelieferteMenge: p.gelieferteMenge,
+      einheit: p.einheit,
+      differenz: p.differenz,
+    })),
+  };
+}
+
+/**
+ * Sendet die Fehlmengen-Email sofort (ohne auf Timer zu warten)
+ */
+export async function sendFehlmengenNow(auftragId: string): Promise<boolean> {
+  const entry = pendingNotifications.get(auftragId);
+  if (!entry || entry.positionen.length === 0) {
+    return false;
+  }
+
+  // Timer stoppen
+  clearTimeout(entry.timer);
+
+  // Sofort senden
+  await sendFehlmengenNotification(auftragId);
+  return true;
+}
+
+/**
+ * Bricht den Timer ab ohne Email zu senden
+ */
+export function cancelFehlmengenTimer(auftragId: string): boolean {
+  const entry = pendingNotifications.get(auftragId);
+  if (!entry) {
+    return false;
+  }
+
+  clearTimeout(entry.timer);
+  pendingNotifications.delete(auftragId);
+  return true;
 }
 
 /**

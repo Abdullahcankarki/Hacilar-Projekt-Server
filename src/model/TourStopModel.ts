@@ -26,6 +26,7 @@ export interface TourStopDoc extends Document {
   gewichtKg?: number | null; // optional, Fallback aus Auftrag
   status: StopStatus;
   fehlgrund?: { code?: FehlgrundEnum; text?: string };
+  bemerkung?: string; // Anweisungen/Bemerkungen für Fahrer (Talimat)
   // Proof (ohne Fotos):
   signaturPngBase64?: string | null;
   signTimestampUtc?: string | null;
@@ -82,6 +83,7 @@ const TourStopSchema = new Schema<TourStopDoc>(
       },
       text: { type: String },
     },
+    bemerkung: { type: String, default: null },
     signaturPngBase64: { type: String },
     signTimestampUtc: { type: String, default: null },
     signedByName: { type: String, default: null },

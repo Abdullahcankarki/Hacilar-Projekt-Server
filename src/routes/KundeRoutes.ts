@@ -78,10 +78,10 @@ kundeRouter.post(
     body('branchenInfo').optional().isString().trim(),
     body('gewerbeDateiUrl').optional().isString().trim(),
     body('zusatzDateiUrl').optional().isString().trim(),
-    body('emailRechnung').optional().isEmail().withMessage('Ungültige E-Mail für Rechnungen'),
-    body('emailLieferschein').optional().isEmail().withMessage('Ungültige E-Mail für Lieferscheine'),
-    body('emailBuchhaltung').optional().isEmail().withMessage('Ungültige E-Mail für Buchhaltung'),
-    body('emailSpedition').optional().isEmail().withMessage('Ungültige E-Mail für Spedition'),
+    body('emailRechnung').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Rechnungen'),
+    body('emailLieferschein').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Lieferscheine'),
+    body('emailBuchhaltung').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Buchhaltung'),
+    body('emailSpedition').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Spedition'),
   ],
   validate,
   async (req: Request, res: Response) => {
@@ -267,16 +267,17 @@ kundeRouter.put(
     body('gewerbeDateiUrl').optional().isString().trim(),
     body('zusatzDateiUrl').optional().isString().trim(),
     body('isApproved').optional().isBoolean().toBoolean(),
-    body('emailRechnung').optional().isEmail().withMessage('Ungültige E-Mail für Rechnungen'),
-    body('emailLieferschein').optional().isEmail().withMessage('Ungültige E-Mail für Lieferscheine'),
-    body('emailBuchhaltung').optional().isEmail().withMessage('Ungültige E-Mail für Buchhaltung'),
-    body('emailSpedition').optional().isEmail().withMessage('Ungültige E-Mail für Spedition'),
+    body('emailRechnung').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Rechnungen'),
+    body('emailLieferschein').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Lieferscheine'),
+    body('emailBuchhaltung').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Buchhaltung'),
+    body('emailSpedition').optional({ values: 'falsy' }).isEmail().withMessage('Ungültige E-Mail für Spedition'),
     body('fehlmengenBenachrichtigung').optional().isBoolean().toBoolean(),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
       const currentUser = req.user as LoginResource;
+      console.log("BODY:", req.body);
       const result = await updateKunde(req.params.id, req.body, currentUser);
       res.json(result);
     } catch (error: any) {

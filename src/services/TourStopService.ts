@@ -519,6 +519,8 @@ export async function updateTourStop(
   if (data.signedByName !== undefined) doc.signedByName = data.signedByName;
   if (data.leergutMitnahme !== undefined)
     doc.leergutMitnahme = data.leergutMitnahme;
+  if (data.bemerkung !== undefined)
+    doc.bemerkung = data.bemerkung;
 
   await doc.save();
   await recomputeTourWeight(doc.tourId.toString());
@@ -643,6 +645,7 @@ function toResource(doc: any): TourStopResource {
     signTimestampUtc: doc.signTimestampUtc,
     signedByName: doc.signedByName,
     leergutMitnahme: doc.leergutMitnahme,
+    bemerkung: doc.bemerkung,
     abgeschlossenAm: doc.abgeschlossenAm,
     updatedAt: doc.updatedAt,
   };

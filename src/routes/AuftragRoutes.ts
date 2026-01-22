@@ -18,7 +18,12 @@ import {
   createAuftragQuick,
   getBestellteArtikelAggregiert,
   setAuftragInFertig,
-} from "../services/AuftragService"; // Passe den Pfad ggf. an
+} from "../services/AuftragService";
+import {
+  getFehlmengenStatus,
+  sendFehlmengenNow,
+  cancelFehlmengenTimer,
+} from "../services/FehlmengenScheduler";
 import { LoginResource } from "../Resources"; // Passe den Pfad ggf. an
 
 const auftragRouter = express.Router();
@@ -661,6 +666,75 @@ auftragRouter.get(
       return res.json(data);
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// ============================================================
+// FEHLMENGEN-TIMER ENDPOINTS (vor /:id Route!)
+// ============================================================
+
+/**
+ * GET /auftraege/:id/fehlmengen-status
+ * Gibt den Status des Fehlmengen-Timers für einen Auftrag zurück
+ */
+auftragRouter.get(
+  "/:id/fehlmengen-status",
+  authenticate,
+  [param("id").isMongoId().withMessage("Ungültige Auftrags-ID")],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const status = getFehlmengenStatus(req.params.id);
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /auftraege/:id/fehlmengen-senden
+ * Sendet die Fehlmengen-Email sofort (ohne auf Timer zu warten)
+ */
+auftragRouter.post(
+  "/:id/fehlmengen-senden",
+  authenticate,
+  [param("id").isMongoId().withMessage("Ungültige Auftrags-ID")],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const success = await sendFehlmengenNow(req.params.id);
+      if (success) {
+        res.json({ success: true, message: "Fehlmengen-Email wurde gesendet" });
+      } else {
+        res.json({ success: false, message: "Kein ausstehender Fehlmengen-Timer für diesen Auftrag" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * DELETE /auftraege/:id/fehlmengen-timer
+ * Bricht den Fehlmengen-Timer ab ohne Email zu senden
+ */
+auftragRouter.delete(
+  "/:id/fehlmengen-timer",
+  authenticate,
+  [param("id").isMongoId().withMessage("Ungültige Auftrags-ID")],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const success = cancelFehlmengenTimer(req.params.id);
+      if (success) {
+        res.json({ success: true, message: "Fehlmengen-Timer wurde abgebrochen" });
+      } else {
+        res.json({ success: false, message: "Kein ausstehender Fehlmengen-Timer für diesen Auftrag" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   }
 );
