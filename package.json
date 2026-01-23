@@ -5,7 +5,7 @@
   "scripts": {
     "test": "jest --runInBand",
     "clean": "rimraf dist coverage junit.xml abgabe*.zip all.log",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cpx \"src/assets/**/*\" dist/assets",
     "start": "node dist/index.js",
     "start:dev": "nodemon -e ts,js --exec \"ts-node src/index.ts\""
   },
@@ -22,6 +22,7 @@
     "@types/pdfkit": "^0.17.3",
     "@types/supertest": "^2.0.12",
     "bestzip": "^2.2.1",
+    "cpx": "^1.5.0",
     "cross-env": "^7.0.3",
     "jest": "^29.7.0",
     "jest-extended": "^4.0.1",
