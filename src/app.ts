@@ -23,6 +23,7 @@ import muellRouter from './routes/inventory/MuellRoutes';
 import reservierungenRouter from './routes/inventory/ReservierungsRoutes';
 import warnungenRouter from './routes/inventory/WarnungenRoutes';
 import statsRouter from './routes/StatsRoutes';
+import { emailLogRouter } from './routes/EmailLogRoutes';
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.use("/api/muell", muellRouter);
 app.use("/api/reservierungen", reservierungenRouter);
 app.use("/api/warnungen", warnungenRouter);
 app.use("/api/stats", statsRouter);
+app.use("/api/email-logs", emailLogRouter);
 
 
 export default app;

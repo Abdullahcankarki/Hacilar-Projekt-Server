@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import path from "path";
+import { logEmail } from "./EmailLogService";
 
 // --- Email Transport Konfiguration ---
 const SMTP_HOST = process.env.SMTP_HOST || "";
@@ -204,7 +205,7 @@ async function sendEmail(
   html: string,
   text: string,
   attachments: nodemailer.SendMailOptions["attachments"] = []
-): Promise<void> {
+): Promise<string | undefined> {
   const mail: nodemailer.SendMailOptions = {
     from: SMTP_FROM,
     to,
@@ -222,12 +223,14 @@ async function sendEmail(
   };
 
   if (transporter) {
-    await transporter.sendMail(mail);
+    const info = await transporter.sendMail(mail);
+    return info.messageId;
   } else {
     console.warn("[MAIL] Transporter nicht konfiguriert – DEV-Log:", {
       to,
       subject,
     });
+    return undefined;
   }
 }
 
@@ -349,7 +352,37 @@ export async function sendAuftragseingangEmail(
     });
   }
 
-  await sendEmail(kundenEmail, `Auftragsbestätigung – ${auftragNummer}`, html, text, attachments);
+  const subject = `Auftragsbestätigung – ${auftragNummer}`;
+  const pdfFilename = pdfBuffer ? `Auftragsbestaetigung_${auftragNummer}.pdf` : undefined;
+  try {
+    const messageId = await sendEmail(kundenEmail, subject, html, text, attachments);
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "auftragsbestaetigung",
+      status: "gesendet",
+      auftragNummer,
+      kundenName,
+      belegTyp: "auftragsbestaetigung",
+      messageId: messageId || undefined,
+      pdfBase64: pdfBuffer ? pdfBuffer.toString("base64") : undefined,
+      pdfFilename,
+    });
+  } catch (err: any) {
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "auftragsbestaetigung",
+      status: "fehlgeschlagen",
+      fehler: err?.message || "Unbekannter Fehler",
+      auftragNummer,
+      kundenName,
+      belegTyp: "auftragsbestaetigung",
+      pdfBase64: pdfBuffer ? pdfBuffer.toString("base64") : undefined,
+      pdfFilename,
+    });
+    throw err;
+  }
 }
 
 // ============================================================
@@ -424,7 +457,37 @@ export async function sendFehlmengenEmail(
     });
   }
 
-  await sendEmail(kundenEmail, `Fehlmengen-Hinweis – Auftrag ${auftragNummer}`, html, text, attachments);
+  const subject = `Fehlmengen-Hinweis – Auftrag ${auftragNummer}`;
+  const pdfFilename = pdfBuffer ? `Lieferschein_${auftragNummer}.pdf` : undefined;
+  try {
+    const messageId = await sendEmail(kundenEmail, subject, html, text, attachments);
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "fehlmengen",
+      status: "gesendet",
+      auftragNummer,
+      kundenName,
+      belegTyp: "lieferschein",
+      messageId: messageId || undefined,
+      pdfBase64: pdfBuffer ? pdfBuffer.toString("base64") : undefined,
+      pdfFilename,
+    });
+  } catch (err: any) {
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "fehlmengen",
+      status: "fehlgeschlagen",
+      fehler: err?.message || "Unbekannter Fehler",
+      auftragNummer,
+      kundenName,
+      belegTyp: "lieferschein",
+      pdfBase64: pdfBuffer ? pdfBuffer.toString("base64") : undefined,
+      pdfFilename,
+    });
+    throw err;
+  }
 }
 
 // ============================================================
@@ -564,7 +627,155 @@ export async function sendLieferscheinEmail(
     .join("\n");
 
   // Hinweis: Anhänge (Lieferschein PDF) werden später hinzugefügt
-  await sendEmail(kundenEmail, `Ihre Lieferung – Auftrag ${auftragNummer}`, html, text);
+  const subject = `Ihre Lieferung – Auftrag ${auftragNummer}`;
+  try {
+    const messageId = await sendEmail(kundenEmail, subject, html, text);
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "lieferschein",
+      status: "gesendet",
+      auftragNummer,
+      kundenName,
+      belegTyp: "lieferschein",
+      messageId: messageId || undefined,
+    });
+  } catch (err: any) {
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "lieferschein",
+      status: "fehlgeschlagen",
+      fehler: err?.message || "Unbekannter Fehler",
+      auftragNummer,
+      kundenName,
+      belegTyp: "lieferschein",
+    });
+    throw err;
+  }
+}
+
+// ============================================================
+// 4. ANGEBOT EMAIL (Preisangebot)
+// ============================================================
+
+interface AngebotEmailData {
+  kundenEmail: string;
+  kundenName: string;
+  positionen: Array<{
+    artikelName: string;
+    kategorie?: string;
+    effektivpreis: number;
+  }>;
+}
+
+export async function sendAngebotEmail(data: AngebotEmailData): Promise<void> {
+  const { kundenEmail, kundenName, positionen } = data;
+
+  // Artikel nach Kategorie gruppieren
+  const grouped = new Map<string, typeof positionen>();
+  for (const p of positionen) {
+    const kat = p.kategorie || "Sonstige";
+    if (!grouped.has(kat)) grouped.set(kat, []);
+    grouped.get(kat)!.push(p);
+  }
+
+  // HTML-Tabellen-Rows mit Kategorie-Headern
+  const tableRows: string[] = [];
+  for (const [kat, items] of grouped) {
+    tableRows.push(`
+      <tr>
+        <td colspan="2" style="padding:12px 12px 6px;font-weight:700;font-size:13px;color:#1e3a8a;background:#f0f4ff;border-bottom:2px solid #dbeafe;">
+          ${kat}
+        </td>
+      </tr>`);
+    for (const p of items) {
+      tableRows.push(`
+      <tr>
+        <td>${p.artikelName}</td>
+        <td style="text-align:right;font-weight:600;white-space:nowrap;">${p.effektivpreis.toFixed(2).replace(".", ",")}&nbsp;€</td>
+      </tr>`);
+    }
+  }
+
+  const content = `
+    <div class="text-center">
+      <span class="info-badge">Preisangebot</span>
+      <h1 style="margin:16px 0 8px 0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:22px;font-weight:800;color:#0f172a;text-align:center;">
+        Ihr persönliches Preisangebot
+      </h1>
+    </div>
+
+    <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#475569;line-height:1.6;">
+      Hallo ${kundenName},<br>
+      anbei finden Sie Ihre aktuellen Artikelpreise.
+    </p>
+
+    <table class="positionen">
+      <thead>
+        <tr>
+          <th>Artikel</th>
+          <th style="text-align:right;">Preis</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${tableRows.join("")}
+      </tbody>
+    </table>
+
+    <hr class="hr" style="border:0;border-top:1px solid #e5e7eb;margin:24px 0;">
+
+    <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#94a3b8;text-align:center;">
+      Bei Fragen erreichen Sie uns unter <a href="mailto:info@hacilar.eu" class="link">info@hacilar.eu</a>
+    </p>
+  `;
+
+  const html = baseEmailTemplate(
+    "Preisangebot – Hacilar",
+    `Ihr Preisangebot von Hacilar.`,
+    content
+  );
+
+  // Text-Version ebenfalls nach Kategorie gruppiert
+  const textLines: string[] = [
+    "Preisangebot – Hacilar",
+    "",
+    `Hallo ${kundenName},`,
+    "anbei finden Sie Ihre aktuellen Artikelpreise.",
+    "",
+  ];
+  for (const [kat, items] of grouped) {
+    textLines.push(`[${kat}]`);
+    for (const p of items) {
+      textLines.push(`- ${p.artikelName}: ${p.effektivpreis.toFixed(2).replace(".", ",")} €`);
+    }
+    textLines.push("");
+  }
+  textLines.push("© Hacilar");
+  const text = textLines.join("\n");
+
+  const subject = `Preisangebot – Hacilar`;
+  try {
+    const messageId = await sendEmail(kundenEmail, subject, html, text);
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "angebot",
+      status: "gesendet",
+      kundenName,
+      messageId: messageId || undefined,
+    });
+  } catch (err: any) {
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "angebot",
+      status: "fehlgeschlagen",
+      fehler: err?.message || "Unbekannter Fehler",
+      kundenName,
+    });
+    throw err;
+  }
 }
 
 // --- Export des Transporters für Tests ---

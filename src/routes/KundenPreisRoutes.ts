@@ -17,6 +17,8 @@ import {
   listArtikelPreisForCustomerBestimmteArtikel,
 } from '../services/KundenPreisService'; // Passe den Pfad ggf. an
 import { LoginResource } from '../Resources'; // Passe den Pfad ggf. an
+import { Kunde } from '../model/KundeModel';
+import { sendAngebotEmail } from '../services/EmailService';
 
 const kundenPreisRouter = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
@@ -342,6 +344,50 @@ kundenPreisRouter.get(
       res.status(200).json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /customer/:customerId/send-angebot
+// Sendet ein Preisangebot per E-Mail mit allen bestimmten Artikeln und deren Endpreisen
+kundenPreisRouter.post(
+  '/customer/:customerId/send-angebot',
+  authenticate,
+  isAdmin,
+  [param('customerId').isMongoId().withMessage('Ungültige Kunden-ID')],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { customerId } = req.params;
+
+      const kunde = await Kunde.findById(customerId).select('name email').lean();
+      if (!kunde) return res.status(404).json({ error: 'Kunde nicht gefunden' });
+      if (!kunde.email) return res.status(400).json({ error: 'Kunde hat keine E-Mail-Adresse' });
+
+      const result = await listArtikelPreisForCustomerBestimmteArtikel({
+        customerId,
+        page: 1,
+        limit: 10000,
+      });
+
+      const items = result;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'Keine Artikel für diesen Kunden gefunden' });
+      }
+
+      await sendAngebotEmail({
+        kundenEmail: kunde.email,
+        kundenName: kunde.name || 'Kunde',
+        positionen: items.map((r: any) => ({
+          artikelName: r.artikelName || 'Artikel',
+          kategorie: r.kategorie,
+          effektivpreis: r.effektivpreis,
+        })),
+      });
+
+      res.json({ message: 'Angebot-E-Mail erfolgreich gesendet' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Fehler beim Senden der E-Mail' });
     }
   }
 );
