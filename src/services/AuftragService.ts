@@ -270,6 +270,14 @@ function convertAuftragToResource(
     kontrolliertZeit: auftrag.kontrolliertZeit
       ? auftrag.kontrolliertZeit.toISOString()
       : undefined,
+    beladeStatus: auftrag.beladeStatus,
+    beladeVon: auftrag.beladeVon?.toString(),
+    beladeVonName: auftrag.beladeVonName,
+    beladeZeit: auftrag.beladeZeit
+      ? auftrag.beladeZeit.toISOString()
+      : undefined,
+    fahrer: auftrag.fahrer,
+    fahrzeug: auftrag.fahrzeug,
   };
 }
 
@@ -326,6 +334,95 @@ export async function createAuftrag(data: {
   }
 
   return convertAuftragToResource(savedAuftrag, totals);
+}
+
+/**
+ * Erstellt einen Auftrag + alle Positionen in einem einzigen Aufruf.
+ * Spart 2 HTTP-Roundtrips gegenüber dem klassischen 3-Schritt-Flow.
+ */
+export async function createAuftragComplete(data: {
+  kunde: string;
+  lieferdatum: string;
+  bemerkungen?: string;
+  positionen: {
+    artikel: string;
+    menge: number;
+    einheit: "kg" | "stück" | "kiste" | "karton";
+    zerlegung?: boolean;
+    vakuum?: boolean;
+    bemerkung?: string;
+  }[];
+}): Promise<AuftragResource> {
+  // Auftragsnummer + Kundendaten parallel laden
+  const [neueNummer, kdoc] = await Promise.all([
+    generiereAuftragsnummer(),
+    Kunde.findById(data.kunde, { name: 1, email: 1 }).lean(),
+  ]);
+
+  const parsedLieferdatum = parseBerlinYmdToUtcDate(data.lieferdatum);
+
+  const newAuftrag = new Auftrag({
+    auftragsnummer: neueNummer,
+    kunde: data.kunde,
+    kundeName: kdoc?.name,
+    artikelPosition: [],
+    status: "offen",
+    lieferdatum: parsedLieferdatum,
+    bemerkungen: data.bemerkungen,
+  });
+  const savedAuftrag = await newAuftrag.save();
+  const auftragId = savedAuftrag._id.toString();
+
+  // Alle Positionen parallel erstellen – jede verknüpft sich selbst per $addToSet
+  await Promise.all(
+    data.positionen.map((pos) =>
+      createArtikelPosition({
+        artikel: pos.artikel,
+        menge: pos.menge,
+        einheit: pos.einheit,
+        zerlegung: pos.zerlegung ?? false,
+        vakuum: pos.vakuum ?? false,
+        bemerkung: pos.bemerkung ?? "",
+        auftragId,
+      })
+    )
+  );
+
+  // Totals berechnen – wird für die Antwort gebraucht
+  const updatedAuftrag = await Auftrag.findById(auftragId).lean();
+  const totals = await computeTotals(updatedAuftrag as unknown as IAuftrag);
+  const resource = convertAuftragToResource(updatedAuftrag as unknown as IAuftrag, totals);
+
+  // Alles weitere im Hintergrund – Client bekommt die Antwort sofort
+  (async () => {
+    try { await Auftrag.updateOne({ _id: auftragId }, { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }); } catch {}
+    if (savedAuftrag.lieferdatum) {
+      try { await onAuftragLieferdatumSet(auftragId); } catch {}
+    }
+    try { await syncReservierungenForAuftrag(auftragId); } catch {}
+    try { await computeBestandsWarnungenForAuftrag(auftragId); } catch {}
+    try { await onAuftragGewichtGeaendert(auftragId); } catch {}
+    if (parsedLieferdatum && kdoc?.email) {
+      try {
+        const pdfBuffer = await generateBelegPdf(auftragId, "auftragsbestaetigung");
+        const bestellDatum = DateTime.fromJSDate(savedAuftrag.createdAt ?? new Date()).setZone(ZONE).toFormat("dd.MM.yyyy");
+        const lieferDatumFormatted = DateTime.fromJSDate(parsedLieferdatum).setZone(ZONE).toFormat("dd.MM.yyyy");
+        await sendAuftragseingangEmail({
+          kundenEmail: kdoc.email,
+          kundenName: kdoc.name || "Kunde",
+          auftragId,
+          auftragNummer: savedAuftrag.auftragsnummer,
+          bestellDatum,
+          lieferDatum: lieferDatumFormatted,
+          pdfBuffer,
+        });
+      } catch (emailErr) {
+        console.error("[MAIL] Auftragsbestätigung konnte nicht gesendet werden:", emailErr);
+      }
+    }
+  })();
+
+  return resource;
 }
 
 /**
@@ -529,6 +626,12 @@ export async function updateAuftrag(
     kommissioniertStartzeit: string;
     kommissioniertEndzeit: string;
     kontrolliertZeit: string;
+    beladeStatus: "offen" | "beladen";
+    beladeVon: string;
+    beladeVonName: string;
+    beladeZeit: string;
+    fahrer: string;
+    fahrzeug: string;
   }>
 ): Promise<AuftragResource> {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -596,6 +699,20 @@ export async function updateAuftrag(
     updateData.kommissioniertEndzeit = toDateOrNull(data.kommissioniertEndzeit);
   if (data.kontrolliertZeit)
     updateData.kontrolliertZeit = toDateOrNull(data.kontrolliertZeit);
+
+  // Belade-Felder
+  if (data.beladeStatus !== undefined)
+    updateData.beladeStatus = data.beladeStatus;
+  if (data.beladeVon !== undefined)
+    updateData.beladeVon = data.beladeVon;
+  if (data.beladeVonName !== undefined)
+    updateData.beladeVonName = data.beladeVonName;
+  if (data.beladeZeit)
+    updateData.beladeZeit = toDateOrNull(data.beladeZeit);
+  if (data.fahrer !== undefined)
+    updateData.fahrer = data.fahrer;
+  if (data.fahrzeug !== undefined)
+    updateData.fahrzeug = data.fahrzeug;
 
   // 3) kommissioniert/kontrolliert Namen auflösen
   if (data.kommissioniertVon) {

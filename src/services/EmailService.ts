@@ -656,7 +656,235 @@ export async function sendLieferscheinEmail(
 }
 
 // ============================================================
-// 4. ANGEBOT EMAIL (Preisangebot)
+// 4. LADEBESTÄTIGUNG EMAIL
+// ============================================================
+
+interface LadebestaetigungEmailData {
+  kundenEmail: string;
+  kundenName: string;
+  auftragNummer: string;
+  beladeZeit: string;
+  gewicht: number;
+  gesamtPaletten?: number;
+  gesamtBoxen?: number;
+  kennzeichen?: string;
+  fahrer?: string;
+  positionen: Array<{
+    artikelName: string;
+    menge: number;
+    einheit: string;
+  }>;
+  pdfBuffer?: Buffer;
+}
+
+export async function sendLadebestaetigungEmail(
+  data: LadebestaetigungEmailData
+): Promise<void> {
+  const { kundenEmail, kundenName, auftragNummer, beladeZeit, gewicht, gesamtPaletten, gesamtBoxen, kennzeichen, fahrer, positionen, pdfBuffer } = data;
+
+  const positionenRows = positionen
+    .map(
+      (p) => `
+      <tr>
+        <td>${p.artikelName}</td>
+        <td style="text-align:right;">${p.menge} ${p.einheit}</td>
+      </tr>
+    `
+    )
+    .join("");
+
+  const content = `
+    <div class="text-center">
+      <span class="success-badge">Beladen abgeschlossen</span>
+      <h1 style="margin:16px 0 8px 0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:22px;font-weight:800;color:#0f172a;text-align:center;">
+        Ihr Auftrag wurde beladen!
+      </h1>
+    </div>
+
+    <p style="margin:0 0 20px 0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#475569;text-align:center;">
+      Hallo ${kundenName},<br>
+      Ihr Auftrag <strong>${auftragNummer}</strong> wurde erfolgreich beladen und ist bereit für den Versand.
+    </p>
+
+    <div style="background:#dbeafe;border-radius:8px;padding:16px;margin-bottom:20px;">
+      <table style="width:100%;">
+        <tr>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;">
+            <strong>Beladezeitpunkt:</strong>
+          </td>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;text-align:right;">
+            ${beladeZeit}
+          </td>
+        </tr>
+        <tr>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;">
+            <strong>Nettogewicht:</strong>
+          </td>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;text-align:right;">
+            ${gewicht.toFixed(2)} kg
+          </td>
+        </tr>
+        ${
+          gesamtPaletten
+            ? `
+        <tr>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;">
+            <strong>Paletten:</strong>
+          </td>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;text-align:right;">
+            ${gesamtPaletten}
+          </td>
+        </tr>
+        `
+            : ""
+        }
+        ${
+          gesamtBoxen
+            ? `
+        <tr>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;">
+            <strong>Boxen:</strong>
+          </td>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;text-align:right;">
+            ${gesamtBoxen}
+          </td>
+        </tr>
+        `
+            : ""
+        }
+        ${
+          kennzeichen
+            ? `
+        <tr>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;">
+            <strong>Kennzeichen:</strong>
+          </td>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;text-align:right;">
+            ${kennzeichen}
+          </td>
+        </tr>
+        `
+            : ""
+        }
+        ${
+          fahrer
+            ? `
+        <tr>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;">
+            <strong>Fahrer:</strong>
+          </td>
+          <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e40af;padding:4px 0;text-align:right;">
+            ${fahrer}
+          </td>
+        </tr>
+        `
+            : ""
+        }
+      </table>
+    </div>
+
+    <h2 style="margin:20px 0 12px 0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;color:#0f172a;">
+      Beladene Artikel
+    </h2>
+
+    <table class="positionen">
+      <thead>
+        <tr>
+          <th>Artikel</th>
+          <th style="text-align:right;">Menge</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${positionenRows}
+      </tbody>
+    </table>
+
+    <div style="background:#f0fdf4;border-radius:8px;padding:12px 16px;margin:20px 0;">
+      <p style="margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#166534;">
+        <strong>Ladebestätigung im Anhang:</strong> Die vollständige Ladebestätigung finden Sie als PDF im Anhang dieser E-Mail.
+      </p>
+    </div>
+
+    <hr class="hr" style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
+
+    <p style="margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#64748b;text-align:center;">
+      Bei Fragen erreichen Sie uns unter <a href="mailto:info@hacilar.eu" class="link">info@hacilar.eu</a>
+    </p>
+  `;
+
+  const html = baseEmailTemplate(
+    "Ladebestätigung – Hacilar",
+    `Auftrag ${auftragNummer} wurde erfolgreich beladen.`,
+    content
+  );
+
+  const text = [
+    "Ladebestätigung – Hacilar",
+    "",
+    `Hallo ${kundenName},`,
+    `Ihr Auftrag ${auftragNummer} wurde erfolgreich beladen und ist bereit für den Versand.`,
+    "",
+    `Beladezeitpunkt: ${beladeZeit}`,
+    `Nettogewicht: ${gewicht.toFixed(2)} kg`,
+    gesamtPaletten ? `Paletten: ${gesamtPaletten}` : "",
+    gesamtBoxen ? `Boxen: ${gesamtBoxen}` : "",
+    kennzeichen ? `Kennzeichen: ${kennzeichen}` : "",
+    fahrer ? `Fahrer: ${fahrer}` : "",
+    "",
+    "Beladene Artikel:",
+    ...positionen.map((p) => `- ${p.artikelName}: ${p.menge} ${p.einheit}`),
+    "",
+    "Die vollständige Ladebestätigung finden Sie als PDF im Anhang.",
+    "© Hacilar",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  // PDF als Anhang hinzufügen
+  const attachments: nodemailer.SendMailOptions["attachments"] = [];
+  if (pdfBuffer) {
+    attachments.push({
+      filename: `Ladebestaetigung_${auftragNummer}.pdf`,
+      content: pdfBuffer,
+      contentType: "application/pdf",
+    });
+  }
+
+  const subject = `Ladebestätigung – Auftrag ${auftragNummer}`;
+  const pdfFilename = pdfBuffer ? `Ladebestaetigung_${auftragNummer}.pdf` : undefined;
+  try {
+    const messageId = await sendEmail(kundenEmail, subject, html, text, attachments);
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "ladebestaetigung",
+      status: "gesendet",
+      auftragNummer,
+      kundenName,
+      belegTyp: "ladebestaetigung",
+      messageId: messageId || undefined,
+      pdfBase64: pdfBuffer ? pdfBuffer.toString("base64") : undefined,
+      pdfFilename,
+    });
+  } catch (err: any) {
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "ladebestaetigung",
+      status: "fehlgeschlagen",
+      fehler: err?.message || "Unbekannter Fehler",
+      auftragNummer,
+      kundenName,
+      belegTyp: "ladebestaetigung",
+      pdfBase64: pdfBuffer ? pdfBuffer.toString("base64") : undefined,
+      pdfFilename,
+    });
+    throw err;
+  }
+}
+
+// ============================================================
+// 5. ANGEBOT EMAIL (Preisangebot)
 // ============================================================
 
 interface AngebotEmailData {
@@ -672,32 +900,6 @@ interface AngebotEmailData {
 export async function sendAngebotEmail(data: AngebotEmailData): Promise<void> {
   const { kundenEmail, kundenName, positionen } = data;
 
-  // Artikel nach Kategorie gruppieren
-  const grouped = new Map<string, typeof positionen>();
-  for (const p of positionen) {
-    const kat = p.kategorie || "Sonstige";
-    if (!grouped.has(kat)) grouped.set(kat, []);
-    grouped.get(kat)!.push(p);
-  }
-
-  // HTML-Tabellen-Rows mit Kategorie-Headern
-  const tableRows: string[] = [];
-  for (const [kat, items] of grouped) {
-    tableRows.push(`
-      <tr>
-        <td colspan="2" style="padding:12px 12px 6px;font-weight:700;font-size:13px;color:#1e3a8a;background:#f0f4ff;border-bottom:2px solid #dbeafe;">
-          ${kat}
-        </td>
-      </tr>`);
-    for (const p of items) {
-      tableRows.push(`
-      <tr>
-        <td>${p.artikelName}</td>
-        <td style="text-align:right;font-weight:600;white-space:nowrap;">${p.effektivpreis.toFixed(2).replace(".", ",")}&nbsp;€</td>
-      </tr>`);
-    }
-  }
-
   const content = `
     <div class="text-center">
       <span class="info-badge">Preisangebot</span>
@@ -706,22 +908,14 @@ export async function sendAngebotEmail(data: AngebotEmailData): Promise<void> {
       </h1>
     </div>
 
-    <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#475569;line-height:1.6;">
+    <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#475569;line-height:1.6;text-align:center;">
       Hallo ${kundenName},<br>
-      anbei finden Sie Ihre aktuellen Artikelpreise.
+      vielen Dank für Ihr Interesse. Ihre persönlichen Artikelpreise stehen Ihnen in unserem System zur Verfügung.
     </p>
 
-    <table class="positionen">
-      <thead>
-        <tr>
-          <th>Artikel</th>
-          <th style="text-align:right;">Preis</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${tableRows.join("")}
-      </tbody>
-    </table>
+    <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#475569;line-height:1.6;text-align:center;">
+      Insgesamt haben Sie <strong>${positionen.length} Artikel</strong> mit individuellen Konditionen hinterlegt.
+    </p>
 
     <hr class="hr" style="border:0;border-top:1px solid #e5e7eb;margin:24px 0;">
 
@@ -736,23 +930,17 @@ export async function sendAngebotEmail(data: AngebotEmailData): Promise<void> {
     content
   );
 
-  // Text-Version ebenfalls nach Kategorie gruppiert
-  const textLines: string[] = [
+  const text = [
     "Preisangebot – Hacilar",
     "",
     `Hallo ${kundenName},`,
-    "anbei finden Sie Ihre aktuellen Artikelpreise.",
+    "vielen Dank für Ihr Interesse. Ihre persönlichen Artikelpreise stehen Ihnen in unserem System zur Verfügung.",
     "",
-  ];
-  for (const [kat, items] of grouped) {
-    textLines.push(`[${kat}]`);
-    for (const p of items) {
-      textLines.push(`- ${p.artikelName}: ${p.effektivpreis.toFixed(2).replace(".", ",")} €`);
-    }
-    textLines.push("");
-  }
-  textLines.push("© Hacilar");
-  const text = textLines.join("\n");
+    `Insgesamt haben Sie ${positionen.length} Artikel mit individuellen Konditionen hinterlegt.`,
+    "",
+    "Bei Fragen erreichen Sie uns unter info@hacilar.eu",
+    "© Hacilar",
+  ].join("\n");
 
   const subject = `Preisangebot – Hacilar`;
   try {

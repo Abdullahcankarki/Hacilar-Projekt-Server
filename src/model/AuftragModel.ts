@@ -21,6 +21,12 @@ export interface IAuftrag extends Document {
   kommissioniertStartzeit?: Date;
   kommissioniertEndzeit?: Date;
   kontrolliertZeit?: Date;
+  beladeStatus?: "offen" | "beladen";
+  beladeVon?: Types.ObjectId;
+  beladeVonName?: string;
+  beladeZeit?: Date;
+  fahrer?: string;
+  fahrzeug?: string;
   createdAt: Date; // Erstellungsdatum
   updatedAt: Date; // Aktualisierungsdatum
   tourId?: Types.ObjectId | null;
@@ -72,6 +78,15 @@ const auftragSchema = new Schema<IAuftrag>(
     kommissioniertStartzeit: { type: Date },
     kommissioniertEndzeit: { type: Date },
     kontrolliertZeit: { type: Date },
+    beladeStatus: {
+      type: String,
+      enum: ["offen", "beladen"],
+    },
+    beladeVon: { type: Schema.Types.ObjectId, ref: "User" },
+    beladeVonName: { type: String },
+    beladeZeit: { type: Date },
+    fahrer: { type: String },
+    fahrzeug: { type: String },
     tourId: { type: Schema.Types.ObjectId, ref: "Tour" },
     tourStopId: { type: Schema.Types.ObjectId, ref: "TourStop" },
 

@@ -235,30 +235,47 @@ function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionReso
   // Table starts at the region top
   let y = regionTop;
 
-  // Column headers (6 columns, no "Pos")
-  const headers = [
-    "Art.-Nr.",
-    "Bezeichnung",
-    "Charge-Nr.",
-    "Gewicht",
-    "Preis/kg",
-    "Gesamt",
-  ];
+  // Column headers - bei Auftragsbestätigung ohne Preis/Gesamt
+  const headers = hideTotals
+    ? [
+        "Art.-Nr.",
+        "Bezeichnung",
+        "Charge-Nr.",
+        "Gewicht",
+      ]
+    : [
+        "Art.-Nr.",
+        "Bezeichnung",
+        "Charge-Nr.",
+        "Gewicht",
+        "Preis/kg",
+        "Gesamt",
+      ];
 
   // Column x positions responsive to region width
-  const widths = [60, 220, 80, 60, 50, 50];
+  const widths = hideTotals
+    ? [60, 220, 80, 160]  // 4 Spalten ohne Preis/Gesamt, letzte Spalte breiter
+    : [60, 220, 80, 60, 50, 50];  // 6 Spalten mit Preis/Gesamt
   const baseTotal = 520; // sum(widths)
   const scale = regionWidth / baseTotal;
   const w = widths.map(v => v * scale);
-  const x = [
-    regionLeft,
-    regionLeft + w[0],
-    regionLeft + w[0] + w[1],
-    regionLeft + w[0] + w[1] + w[2],
-    regionLeft + w[0] + w[1] + w[2] + w[3],
-    regionLeft + w[0] + w[1] + w[2] + w[3] + w[4],
-    regionRight
-  ];
+  const x = hideTotals
+    ? [
+        regionLeft,
+        regionLeft + w[0],
+        regionLeft + w[0] + w[1],
+        regionLeft + w[0] + w[1] + w[2],
+        regionRight
+      ]
+    : [
+        regionLeft,
+        regionLeft + w[0],
+        regionLeft + w[0] + w[1],
+        regionLeft + w[0] + w[1] + w[2],
+        regionLeft + w[0] + w[1] + w[2] + w[3],
+        regionLeft + w[0] + w[1] + w[2] + w[3] + w[4],
+        regionRight
+      ];
 
   // Shared layout for pagination & reserves
   const lineH = 14; // row line height for table content
@@ -271,12 +288,21 @@ function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionReso
   // Helper to (re)draw the table header and set y under it
   const drawHeaderRow = () => {
     doc.font("Helvetica-Bold").fontSize(10);
-    doc.text(headers[0], x[0], y, { width: x[1] - x[0] - 6 });
-    doc.text(headers[1], x[1], y, { width: x[2] - x[1] - 6 });
-    doc.text(headers[2], x[2], y, { width: x[3] - x[2] - 6 });
-    doc.text(headers[3], x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
-    doc.text(headers[4], x[4], y, { width: x[5] - x[4] - 6, align: 'right', lineBreak: false });
-    doc.text(headers[5], x[5], y, { width: x[6] - x[5] - 6, align: 'right', lineBreak: false });
+    if (hideTotals) {
+      // 4 Spalten: Art.-Nr., Bezeichnung, Charge-Nr., Gewicht
+      doc.text(headers[0], x[0], y, { width: x[1] - x[0] - 6 });
+      doc.text(headers[1], x[1], y, { width: x[2] - x[1] - 6 });
+      doc.text(headers[2], x[2], y, { width: x[3] - x[2] - 6 });
+      doc.text(headers[3], x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
+    } else {
+      // 6 Spalten: Art.-Nr., Bezeichnung, Charge-Nr., Gewicht, Preis/kg, Gesamt
+      doc.text(headers[0], x[0], y, { width: x[1] - x[0] - 6 });
+      doc.text(headers[1], x[1], y, { width: x[2] - x[1] - 6 });
+      doc.text(headers[2], x[2], y, { width: x[3] - x[2] - 6 });
+      doc.text(headers[3], x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
+      doc.text(headers[4], x[4], y, { width: x[5] - x[4] - 6, align: 'right', lineBreak: false });
+      doc.text(headers[5], x[5], y, { width: x[6] - x[5] - 6, align: 'right', lineBreak: false });
+    }
     doc.moveTo(regionLeft, y + 12).lineTo(regionRight, y + 12).strokeColor('#000').lineWidth(0.5).stroke();
     y += 18;
     doc.font("Helvetica").fontSize(10);
@@ -325,28 +351,37 @@ function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionReso
     const bez = pos.artikelName || "Artikel";
 
     // Pre-calc row height (leergut lines + charge lines, at least one line)
-    const leergutCount = Array.isArray(pos.leergut) ? pos.leergut.length : 0;
+    // Bei hideTotals (Auftragsbestätigung/Ladebestätigung) keine Leergut-Extra-Zeilen
+    const leergutCount = (!hideTotals && Array.isArray(pos.leergut)) ? pos.leergut.length : 0;
     const chargeLinesPreview = Array.isArray(pos.chargennummern) ? pos.chargennummern.filter(c => !!c && String(c).trim() !== '') : [];
     const maxLinesPreview = Math.max(1, chargeLinesPreview.length);
     const need = (leergutCount + maxLinesPreview) * lineH;
     ensureRoom(need);
 
     // ===== Leergut-Zusatzzeilen (immer DARÜBER) =====
-    if (Array.isArray(pos.leergut) && pos.leergut.length > 0) {
+    // Bei Auftragsbestätigung/Ladebestätigung (hideTotals=true) werden Leergut-Positionen
+    // als separate Artikel-Positionen gezeigt, nicht als Extra-Zeilen
+    if (!hideTotals && Array.isArray(pos.leergut) && pos.leergut.length > 0) {
       pos.leergut.forEach((lg) => {
         const lgName = lg?.leergutArt ? String(lg.leergutArt) : 'Leergut';
         const lgAnzahlNum = typeof (lg as any).leergutAnzahl === 'number' ? (lg as any).leergutAnzahl : undefined;
         const lgAnzahl = typeof lgAnzahlNum === 'number' ? fmt2(lgAnzahlNum) : '';
 
-        // Art.-Nr.: leer, Bezeichnung = Leergutname, Charge: leer
-        doc.text('', x[0], y, { width: x[1] - x[0] - 6 });
-        doc.text(lgName, x[1], y, { width: x[2] - x[1] - 6 });
-        doc.text('', x[2], y, { width: x[3] - x[2] - 6 });
-        // Gewichtsspalte zeigt Anzahl
-        doc.text(lgAnzahl, x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
-        // Preis/kg = 0, Gesamt = 0
-        doc.text(euro(0), x[4], y, { width: x[5] - x[4] - 6, align: 'right', lineBreak: false });
-        doc.text(euro(0), x[5], y, { width: x[6] - x[5] - 6, align: 'right', lineBreak: false });
+        if (hideTotals) {
+          // 4 Spalten: Art.-Nr. leer, Bezeichnung, Charge leer, Gewicht (Anzahl)
+          doc.text('', x[0], y, { width: x[1] - x[0] - 6 });
+          doc.text(lgName, x[1], y, { width: x[2] - x[1] - 6 });
+          doc.text('', x[2], y, { width: x[3] - x[2] - 6 });
+          doc.text(lgAnzahl, x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
+        } else {
+          // 6 Spalten: Art.-Nr. leer, Bezeichnung, Charge leer, Gewicht (Anzahl), Preis/kg = 0, Gesamt = 0
+          doc.text('', x[0], y, { width: x[1] - x[0] - 6 });
+          doc.text(lgName, x[1], y, { width: x[2] - x[1] - 6 });
+          doc.text('', x[2], y, { width: x[3] - x[2] - 6 });
+          doc.text(lgAnzahl, x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
+          doc.text(euro(0), x[4], y, { width: x[5] - x[4] - 6, align: 'right', lineBreak: false });
+          doc.text(euro(0), x[5], y, { width: x[6] - x[5] - 6, align: 'right', lineBreak: false });
+        }
 
         // Nach jeder Leergut-Zeile einen Zeilensprung nach unten
         y += lineH;
@@ -382,21 +417,35 @@ function drawPositionsTable(doc: PDFKitDocument, positionen: ArtikelPositionReso
     if (typeof gesamt === 'number') { sumNetto += gesamt; pageNetto += gesamt; }
 
     // Render first line (and single-line cells)
-    doc.text(String(artnr), x[0], y, { width: x[1] - x[0] - 6 });
-    doc.text(String(bez), x[1], y, { width: x[2] - x[1] - 6 });
-    if (chargeLines.length > 0) {
-      doc.text(String(chargeLines[0]), x[2], y, { width: x[3] - x[2] - 6 });
-    } else {
-      doc.text('', x[2], y, { width: x[3] - x[2] - 6 });
-    }
     const gewichtText = (typeof anzeigeMenge === 'number')
       ? (anzeigeEinheit === 'kg' || anzeigeEinheit === 'KG' || !anzeigeEinheit
           ? fmt2(anzeigeMenge)
           : `${fmt2(anzeigeMenge)}`)
       : '';
-    doc.text(gewichtText, x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
-    doc.text(preisProEinheit != null ? euro(preisProEinheit) : '', x[4], y, { width: x[5] - x[4] - 6, align: 'right', lineBreak: false });
-    doc.text(gesamt != null ? euro(gesamt) : '', x[5], y, { width: x[6] - x[5] - 6, align: 'right', lineBreak: false });
+
+    if (hideTotals) {
+      // 4 Spalten: Art.-Nr., Bezeichnung, Charge-Nr., Gewicht
+      doc.text(String(artnr), x[0], y, { width: x[1] - x[0] - 6 });
+      doc.text(String(bez), x[1], y, { width: x[2] - x[1] - 6 });
+      if (chargeLines.length > 0) {
+        doc.text(String(chargeLines[0]), x[2], y, { width: x[3] - x[2] - 6 });
+      } else {
+        doc.text('', x[2], y, { width: x[3] - x[2] - 6 });
+      }
+      doc.text(gewichtText, x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
+    } else {
+      // 6 Spalten: Art.-Nr., Bezeichnung, Charge-Nr., Gewicht, Preis/kg, Gesamt
+      doc.text(String(artnr), x[0], y, { width: x[1] - x[0] - 6 });
+      doc.text(String(bez), x[1], y, { width: x[2] - x[1] - 6 });
+      if (chargeLines.length > 0) {
+        doc.text(String(chargeLines[0]), x[2], y, { width: x[3] - x[2] - 6 });
+      } else {
+        doc.text('', x[2], y, { width: x[3] - x[2] - 6 });
+      }
+      doc.text(gewichtText, x[3], y, { width: x[4] - x[3] - 6, align: 'right', lineBreak: false });
+      doc.text(preisProEinheit != null ? euro(preisProEinheit) : '', x[4], y, { width: x[5] - x[4] - 6, align: 'right', lineBreak: false });
+      doc.text(gesamt != null ? euro(gesamt) : '', x[5], y, { width: x[6] - x[5] - 6, align: 'right', lineBreak: false });
+    }
 
     // Render remaining chargennummer lines one per row span
     for (let i = 1; i < maxLines; i++) {
@@ -654,18 +703,20 @@ export async function generateBelegPdf(
   const buffers: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => buffers.push(chunk));
 
-  // === Header für Auftragsbestätigung und Lieferschein ===
+  // === Header für Auftragsbestätigung, Lieferschein und Ladebestätigung ===
   if (belegTyp === 'auftragsbestaetigung') {
     drawHeader(doc, { title: "Auftragsbestätigung" });
   } else if (belegTyp === 'lieferschein') {
     drawHeader(doc, { title: "Lieferschein" });
+  } else if (belegTyp === 'ladebestaetigung') {
+    drawHeader(doc, { title: "Ladebestätigung" });
   }
 
   // === Rechnungskopf (Kundeninfos) ===
   drawRechnungskopf(doc, kunde, auftrag);
 
-  // Body: Artikelpositionen-Tabelle (Rechnung, Lieferschein, Auftragsbestätigung)
-  if (belegTyp === 'rechnung' || belegTyp === 'lieferschein' || belegTyp === 'auftragsbestaetigung') {
+  // Body: Artikelpositionen-Tabelle (Rechnung, Lieferschein, Auftragsbestätigung, Ladebestätigung)
+  if (belegTyp === 'rechnung' || belegTyp === 'lieferschein' || belegTyp === 'auftragsbestaetigung' || belegTyp === 'ladebestaetigung') {
     const raw = Array.isArray(auftrag.artikelPosition) ? (auftrag.artikelPosition as any[]) : [];
     const ids = raw.map((p: any) => toIdString(p)).filter(Boolean) as string[];
     dlog('normalized position ids:', ids);
@@ -675,7 +726,8 @@ export async function generateBelegPdf(
       try {
         const pos = await getArtikelPositionById(id);
         // Leergut-Positionen ausschließen (haben leergutVonPositionId gesetzt)
-        if (pos.leergutVonPositionId) {
+        // ABER: Bei Ladebestätigung Leergut MIT aufnehmen
+        if (pos.leergutVonPositionId && belegTyp !== 'ladebestaetigung') {
           dlog('position skipped (Leergut)', id);
           continue;
         }
@@ -697,9 +749,9 @@ export async function generateBelegPdf(
 
     const mwstSatz = (auftrag as any).mwstSatz ?? 7;
     dlog('mwstSatz used:', mwstSatz);
-    // Auftragsbestätigung: keine Unterschriftsfelder und keine Preissummen
-    const hideSignatures = belegTyp === 'auftragsbestaetigung';
-    const hideTotals = belegTyp === 'auftragsbestaetigung';
+    // Auftragsbestätigung & Ladebestätigung: keine Unterschriftsfelder und keine Preissummen
+    const hideSignatures = belegTyp === 'auftragsbestaetigung' || belegTyp === 'ladebestaetigung';
+    const hideTotals = belegTyp === 'auftragsbestaetigung' || belegTyp === 'ladebestaetigung';
     drawPositionsTable(doc, positionen, mwstSatz, kunde, auftrag, { hideSignatures, hideTotals });
   }
 
@@ -745,7 +797,8 @@ export async function generateBelegePdfs(
         belegTyp === 'rechnung' ? 'Rechnung' :
         belegTyp === 'lieferschein' ? 'Lieferschein' :
         belegTyp === 'gutschrift' ? 'Gutschrift' :
-        belegTyp === 'preisdifferenz' ? 'Preisdifferenz' : 'Beleg';
+        belegTyp === 'preisdifferenz' ? 'Preisdifferenz' :
+        belegTyp === 'ladebestaetigung' ? 'Ladebestaetigung' : 'Beleg';
 
       const rn = (auftrag as any).rechnungsNummer || (auftrag as any).auftragsnummer || auftragId;
       const kdName = (kunde?.name ? String(kunde.name) : 'Kunde').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]/g, '');

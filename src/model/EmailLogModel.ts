@@ -3,7 +3,7 @@ import { Schema, model, Types } from "mongoose";
 export interface IEmailLog {
   empfaenger: string[];
   betreff: string;
-  typ: "auftragsbestaetigung" | "fehlmengen" | "lieferschein" | "angebot";
+  typ: "auftragsbestaetigung" | "fehlmengen" | "lieferschein" | "angebot" | "ladebestaetigung";
   status: "gesendet" | "fehlgeschlagen";
   fehler?: string;
   auftragId?: Types.ObjectId;
@@ -21,7 +21,7 @@ const emailLogSchema = new Schema<IEmailLog>(
     betreff: { type: String, required: true },
     typ: {
       type: String,
-      enum: ["auftragsbestaetigung", "fehlmengen", "lieferschein", "angebot"],
+      enum: ["auftragsbestaetigung", "fehlmengen", "lieferschein", "angebot", "ladebestaetigung"],
       required: true,
     },
     status: {

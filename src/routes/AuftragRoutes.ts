@@ -16,6 +16,7 @@ import {
   setAuftragInBearbeitung,
   getTourInfosForAuftraege,
   createAuftragQuick,
+  createAuftragComplete,
   getBestellteArtikelAggregiert,
   setAuftragInFertig,
 } from "../services/AuftragService";
@@ -25,6 +26,11 @@ import {
   cancelFehlmengenTimer,
 } from "../services/FehlmengenScheduler";
 import { LoginResource } from "../Resources"; // Passe den Pfad ggf. an
+import { Kunde } from "../model/KundeModel";
+import { generateBelegPdf } from "../services/BelegService";
+import { sendLadebestaetigungEmail } from "../services/EmailService";
+import { DateTime } from "luxon";
+import { getArtikelPositionById } from "../services/ArtikelPositionService";
 
 const auftragRouter = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
@@ -102,6 +108,40 @@ const canViewAuftrag = (user: LoginResource, auftrag: any): boolean => {
 /* -------------------------------
    Routen für Aufträge
 ---------------------------------*/
+
+/**
+ * POST /auftrag/complete
+ * Erstellt Auftrag + alle Positionen in einem einzigen HTTP-Call.
+ * Erlaubt für Kunden (nur eigene ID) und Admins/Verkäufer.
+ */
+auftragRouter.post(
+  "/complete",
+  authenticate,
+  [
+    body("kunde").isString().trim().notEmpty().isMongoId().withMessage("Ungültige Kunde-ID"),
+    body("lieferdatum").isISO8601().withMessage("Lieferdatum muss ein gültiges Datum sein"),
+    body("bemerkungen").optional().isString().trim(),
+    body("positionen").isArray({ min: 1 }).withMessage("Mindestens eine Position erforderlich"),
+    body("positionen.*.artikel").isMongoId().withMessage("Ungültige Artikel-ID"),
+    body("positionen.*.menge").isFloat({ gt: 0 }).withMessage("Menge muss > 0 sein"),
+    body("positionen.*.einheit").isIn(["kg", "stück", "kiste", "karton"]).withMessage("Ungültige Einheit"),
+    body("positionen.*.zerlegung").optional().isBoolean(),
+    body("positionen.*.vakuum").optional().isBoolean(),
+    body("positionen.*.bemerkung").optional().isString().trim(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user?.role.includes("admin") && req.body.kunde !== req.user?.id) {
+        return res.status(403).json({ error: "Zugriff verweigert: Kunde stimmt nicht überein" });
+      }
+      const result = await createAuftragComplete(req.body);
+      res.status(201).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 /**
  * POST /auftraege
@@ -995,6 +1035,121 @@ auftragRouter.delete(
         message: `${ids.length} Auftrag${ids.length === 1 ? '' : 'e'} gelöscht`,
         deletedCount: ids.length
       });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /auftraege/:id/beladen
+ * Markiert einen Auftrag als beladen und speichert Beladeinformationen
+ * Erlaubte Rollen: admin, kommissionierung, kontrolle
+ */
+auftragRouter.post(
+  "/:id/beladen",
+  authenticate,
+  [
+    param("id").isMongoId().withMessage("Ungültige Auftrag-ID"),
+    body("fahrer").optional().isString().trim(),
+    body("fahrzeug").optional().isString().trim(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const istBerechtigt =
+        req.user?.role.includes("admin") ||
+        req.user?.role.includes("kommissionierung") ||
+        req.user?.role.includes("kontrolle");
+
+      if (!istBerechtigt) {
+        return res.status(403).json({
+          error: "Nur Admin, Kommissionierung oder Kontrolle dürfen Aufträge beladen",
+        });
+      }
+
+      const auftrag = await getAuftragById(req.params.id);
+
+      // Prüfen ob Auftrag fertig kommissioniert wurde
+      if (auftrag.kommissioniertStatus !== "fertig") {
+        return res.status(400).json({
+          error: "Auftrag muss zuerst fertig kommissioniert werden",
+        });
+      }
+
+      const patch = {
+        beladeStatus: "beladen" as const,
+        beladeVon: req.user?.id,
+        beladeVonName: (req.user as any)?.name || (req.user as any)?.username || "Unbekannt",
+        beladeZeit: new Date().toISOString(),
+        fahrer: req.body.fahrer || undefined,
+        fahrzeug: req.body.fahrzeug || undefined,
+      };
+
+      const updated = await updateAuftrag(req.params.id, patch);
+
+      // Ladebestätigung per E-Mail senden (async, Fehler nicht blockierend)
+      setImmediate(async () => {
+        try {
+          const kunde = await Kunde.findById(auftrag.kunde);
+          if (!kunde?.email) return;
+
+          // PDF generieren
+          const pdfBuffer = await generateBelegPdf(req.params.id, "ladebestaetigung");
+
+          // Positionen für E-Mail laden
+          const posIds = Array.isArray(updated.artikelPosition) ? updated.artikelPosition : [];
+          const positionen: Array<{ artikelName: string; menge: number; einheit: string }> = [];
+          for (const posId of posIds) {
+            try {
+              const pos = await getArtikelPositionById(String(posId));
+              if (!pos.leergutVonPositionId) {
+                positionen.push({
+                  artikelName: pos.artikelName || "Unbekannt",
+                  menge: pos.kommissioniertMenge || pos.menge || 0,
+                  einheit: pos.kommissioniertEinheit || pos.einheit || "kg",
+                });
+              }
+            } catch (e) {
+              // Position konnte nicht geladen werden
+            }
+          }
+
+          // Kennzeichen aus Tour holen (falls vorhanden)
+          let kennzeichen: string | undefined;
+          if (auftrag.tourId) {
+            try {
+              const { getTourById } = await import("../services/TourService");
+              const tour = await getTourById(String(auftrag.tourId));
+              kennzeichen = (tour as any)?.kennzeichen;
+            } catch (e) {
+              // Tour konnte nicht geladen werden
+            }
+          }
+
+          const beladeZeitFormatted = DateTime.fromISO(patch.beladeZeit, { zone: "Europe/Berlin" }).toFormat(
+            "dd.MM.yyyy HH:mm"
+          );
+
+          await sendLadebestaetigungEmail({
+            kundenEmail: kunde.email,
+            kundenName: kunde.name || "Kunde",
+            auftragNummer: updated.auftragsnummer || req.params.id,
+            beladeZeit: beladeZeitFormatted,
+            gewicht: updated.gewicht || 0,
+            gesamtPaletten: (updated as any).gesamtPaletten,
+            gesamtBoxen: (updated as any).gesamtBoxen,
+            kennzeichen,
+            fahrer: req.body.fahrer,
+            positionen,
+            pdfBuffer,
+          });
+        } catch (emailErr: any) {
+          console.error("Fehler beim Senden der Ladebestätigung-Email:", emailErr?.message || emailErr);
+        }
+      });
+
+      res.json(updated);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
