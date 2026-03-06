@@ -25,6 +25,7 @@ const ALLOWED_ROLES: MitarbeiterRolle[] = [
   "statistik",
   "kunde",
   "support",
+  "gefluegel",
 ];
 
 const JWT_EXPIRES_SECONDS = Number(process.env.JWT_EXPIRES_SECONDS || 60 * 60 * 10);

@@ -25,6 +25,7 @@ import warnungenRouter from './routes/inventory/WarnungenRoutes';
 import statsRouter from './routes/StatsRoutes';
 import { emailLogRouter } from './routes/EmailLogRoutes';
 import imageProxyRouter from './routes/ImageProxyRoutes';
+import gefluegelRouter from './routes/GefluegelRoutes';
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use("/api/reservierungen", reservierungenRouter);
 app.use("/api/warnungen", warnungenRouter);
 app.use("/api/stats", statsRouter);
 app.use("/api/email-logs", emailLogRouter);
+app.use("/api/gefluegel", gefluegelRouter);
 app.use("/api", imageProxyRouter);
 
 

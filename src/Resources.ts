@@ -23,7 +23,8 @@ export type MitarbeiterRolle =
   | "zerleger"
   | "statistik"
   | "kunde"
-  | "support";
+  | "support"
+  | "gefluegel";
 
 export type KundeResource = {
   id?: string;
@@ -327,6 +328,37 @@ export type TourSplitLog = {
   createdBy: string;          // Mitarbeiter-ID
   mode: "plz_bucket" | "capacity" | "round_robin";
   note?: string;
+};
+
+// ===== Geflügel-Zerlegung =====
+
+export type GefluegelLieferantResource = {
+  id?: string;
+  name: string;
+  sollProzent: number;
+  ekProKg: number;
+  zerlegungskostenProKiste: number;
+  kistenGewichtKg: number;
+  aktiv: boolean;
+  reihenfolge: number;
+};
+
+export type GefluegelZerlegerResource = {
+  id?: string;
+  name: string;
+  aktiv: boolean;
+  reihenfolge: number;
+};
+
+export type GefluegelEintragResource = {
+  id?: string;
+  datum: string;
+  zerlegerId: string;
+  zerlegerName: string;
+  lieferantId: string;
+  lieferantName: string;
+  kisten: number;
+  kg: number;
 };
 
 // ===== Bestandsmodul: neue Ressourcen & Enums =====
