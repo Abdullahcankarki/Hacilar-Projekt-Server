@@ -69,6 +69,7 @@ function zerlegerToResource(doc: any): GefluegelZerlegerResource {
   return {
     id: doc._id.toString(),
     name: doc.name,
+    kategorien: doc.kategorien ?? ["haehnchen"],
     aktiv: doc.aktiv,
     reihenfolge: doc.reihenfolge ?? 0,
   };

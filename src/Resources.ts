@@ -343,9 +343,12 @@ export type GefluegelLieferantResource = {
   reihenfolge: number;
 };
 
+export type ZerlegerKategorie = "haehnchen" | "pute_fluegel" | "pute_keule";
+
 export type GefluegelZerlegerResource = {
   id?: string;
   name: string;
+  kategorien: ZerlegerKategorie[];
   aktiv: boolean;
   reihenfolge: number;
 };
@@ -359,6 +362,70 @@ export type GefluegelEintragResource = {
   lieferantName: string;
   kisten: number;
   kg: number;
+};
+
+// ===== Pute-Zerlegung =====
+
+export type PuteKategorie = "pute_fluegel" | "pute_keule";
+
+export type PuteEintragResource = {
+  id?: string;
+  datum: string;
+  kategorie: PuteKategorie;
+  zerlegerId: string;
+  zerlegerName: string;
+  mitKnochen: number;
+  ohneKnochen: number;
+};
+
+export type PuteConfigResource = {
+  id?: string;
+  kategorie: PuteKategorie;
+  sollProzent: number;
+};
+
+// ===== Buchhaltung: Offene Posten & Leergut =====
+
+export type OffenerPostenImportResource = {
+  id?: string;
+  datum: string;
+  berichtsDatum: string;
+  dateiname: string;
+  anzahlPosten: number;
+  gesamtBetrag: number;
+};
+
+export type OffenerPostenResource = {
+  id?: string;
+  importId: string;
+  importDatum: string;
+  berichtsDatum: string;
+  kontonr: string;
+  kunde: string;
+  buchNr: string;
+  datum: string;
+  reNr: string;
+  betrag: number;
+  tageOffen: number;
+  mahndatum?: string;
+  stufe: string;
+};
+
+export type LeergutImportResource = {
+  id?: string;
+  datum: string;
+  anzahlDateien: number;
+  anzahlKunden: number;
+};
+
+export type LeergutEintragResource = {
+  id?: string;
+  importId: string;
+  importDatum: string;
+  kundennr: string;
+  kunde: string;
+  artikel: string;
+  alterBestand: number;
 };
 
 // ===== Bestandsmodul: neue Ressourcen & Enums =====
