@@ -796,8 +796,25 @@ bot.action(/^pick_customer:(.+)$/, async (ctx) => {
 });
 
 export function initTelegramBot() {
-  bot.launch(); // Long-Polling (für Produktion ggf. auf Webhook umstellen)
+  bot.launch({
+    dropPendingUpdates: true,
+  }).catch((err: any) => {
+    if (err?.response?.error_code === 409) {
+      console.warn("⚠️ Telegram-Bot Konflikt (409) – andere Instanz läuft noch. Retry in 5s...");
+      setTimeout(() => {
+        bot.launch({ dropPendingUpdates: true }).catch((e: any) => {
+          console.error("❌ Telegram-Bot konnte nicht gestartet werden:", e.message);
+        });
+      }, 5000);
+    } else {
+      console.error("❌ Telegram-Bot Fehler:", err.message);
+    }
+  });
   console.log("🤖 Telegram-Bot gestartet");
+
+  // Graceful shutdown
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
 
 bot.action(/^pick_article:(.+)$/, async (ctx) => {
