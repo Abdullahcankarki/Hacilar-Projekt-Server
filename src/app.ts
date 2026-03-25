@@ -33,7 +33,7 @@ import leergutBuchhaltungRouter from './routes/LeergutRoutes';
 const app = express();
 
 // Middleware:
-app.use('*', express.json()) // vgl. Folie 138
+app.use('*', express.json({ limit: '10mb' }))
 
 // Routes
 // TODO: Registrieren Sie hier die weiteren Router:

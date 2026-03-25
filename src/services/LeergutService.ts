@@ -91,3 +91,8 @@ export async function deleteImport(importId: string): Promise<void> {
   const doc = await LeergutImport.findByIdAndDelete(importId);
   if (!doc) throw new Error("Import nicht gefunden");
 }
+
+export async function deleteKundeEintraege(kundennr: string): Promise<{ deleted: number }> {
+  const result = await LeergutEintrag.deleteMany({ kundennr });
+  return { deleted: result.deletedCount };
+}

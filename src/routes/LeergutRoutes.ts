@@ -120,4 +120,40 @@ leergutRouter.delete(
   }
 );
 
+// DELETE /api/leergut/kunde/:kundennr — alle Eintraege eines Kunden loeschen
+leergutRouter.delete(
+  "/kunde/:kundennr",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { deleteKundeEintraege } = await import("../services/LeergutService");
+      const result = await deleteKundeEintraege(req.params.kundennr);
+      res.json({ message: `${result.deleted} Einträge gelöscht` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// POST /api/leergut/send-email — Leergut-Bestätigung per E-Mail senden
+leergutRouter.post(
+  "/send-email",
+  authenticate,
+  [
+    body("kundenEmail").isEmail().withMessage("Gültige E-Mail erforderlich"),
+    body("kundenName").isString().trim().notEmpty(),
+    body("pdfBase64").isString().notEmpty().withMessage("PDF-Daten erforderlich"),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { sendLeergutEmail } = await import("../services/EmailService");
+      await sendLeergutEmail(req.body);
+      res.json({ message: "E-Mail gesendet" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 export default leergutRouter;

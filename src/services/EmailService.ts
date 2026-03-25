@@ -966,5 +966,68 @@ export async function sendAngebotEmail(data: AngebotEmailData): Promise<void> {
   }
 }
 
+// ============================================================
+// 6. LEERGUT-BESTÄTIGUNG EMAIL
+// ============================================================
+export async function sendLeergutEmail(data: {
+  kundenEmail: string;
+  kundenName: string;
+  pdfBase64: string;
+}): Promise<void> {
+  const { kundenEmail, kundenName, pdfBase64 } = data;
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <p>Sehr geehrte Damen und Herren,</p>
+      <p>anbei erhalten Sie die aktuelle Leergutaufstellung für <strong>${kundenName}</strong>.</p>
+      <p>Wir bitten Sie, diese sorgfältig zu prüfen und uns bei Abweichungen umgehend zu informieren.</p>
+      <p>Falls Ihr Leergutsaldo mit unserem Saldo übereinstimmt, bitten wir Sie, die Aufstellung mit Stempel und Unterschrift versehen an uns zurückzusenden.</p>
+      <br/>
+      <p>Mit freundlichen Grüßen<br/>Geschäftsleitung<br/>Hacilar Helal Et Kombinasi</p>
+    </div>
+  `;
+
+  const text = [
+    `Sehr geehrte Damen und Herren,`,
+    ``,
+    `anbei erhalten Sie die aktuelle Leergutaufstellung für ${kundenName}.`,
+    `Wir bitten Sie, diese sorgfältig zu prüfen.`,
+    ``,
+    `Mit freundlichen Grüßen`,
+    `Hacilar Helal Et Kombinasi`,
+  ].join("\n");
+
+  const subject = `Leergutaufstellung – ${kundenName} – Hacilar`;
+  const attachments = [
+    {
+      filename: `Leergut_${kundenName.replace(/[^a-zA-Z0-9äöüÄÖÜß]/g, "_")}.pdf`,
+      content: Buffer.from(pdfBase64, "base64"),
+      contentType: "application/pdf",
+    },
+  ];
+
+  try {
+    const messageId = await sendEmail(kundenEmail, subject, html, text, attachments);
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "leergut",
+      status: "gesendet",
+      kundenName,
+      messageId: messageId || undefined,
+    });
+  } catch (err: any) {
+    logEmail({
+      empfaenger: [kundenEmail],
+      betreff: subject,
+      typ: "leergut",
+      status: "fehlgeschlagen",
+      fehler: err?.message || "Unbekannter Fehler",
+      kundenName,
+    });
+    throw err;
+  }
+}
+
 // --- Export des Transporters für Tests ---
 export { transporter, canSendEmail };
