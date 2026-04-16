@@ -1,6 +1,11 @@
 import { Schema, model } from "mongoose";
 
-export type ZerlegerKategorie = "haehnchen" | "pute_fluegel" | "pute_keule";
+export type ZerlegerKategorie =
+  | "haehnchen"
+  | "pute_fluegel"
+  | "pute_keule"
+  | "ganz_haehnchen"
+  | "brust";
 
 export interface IGefluegelZerleger {
   name: string;
@@ -13,7 +18,7 @@ const gefluegelZerlegerSchema = new Schema<IGefluegelZerleger>({
   name: { type: String, required: true, unique: true },
   kategorien: {
     type: [String],
-    enum: ["haehnchen", "pute_fluegel", "pute_keule"],
+    enum: ["haehnchen", "pute_fluegel", "pute_keule", "ganz_haehnchen", "brust"],
     default: ["haehnchen"],
   },
   aktiv: { type: Boolean, default: true },

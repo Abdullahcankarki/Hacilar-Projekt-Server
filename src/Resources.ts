@@ -343,7 +343,12 @@ export type GefluegelLieferantResource = {
   reihenfolge: number;
 };
 
-export type ZerlegerKategorie = "haehnchen" | "pute_fluegel" | "pute_keule";
+export type ZerlegerKategorie =
+  | "haehnchen"
+  | "pute_fluegel"
+  | "pute_keule"
+  | "ganz_haehnchen"
+  | "brust";
 
 export type GefluegelZerlegerResource = {
   id?: string;
@@ -382,6 +387,48 @@ export type PuteConfigResource = {
   id?: string;
   kategorie: PuteKategorie;
   sollProzent: number;
+};
+
+// ===== Ganz Hähnchen (Whole Chicken) =====
+
+export type GanzHaehnchenEintragResource = {
+  id?: string;
+  datum: string;
+  zerlegerId: string;
+  zerlegerName: string;
+  anzahlKisten: number;
+  gewichtGesamt: number;
+  brust: number;
+  keule: number;
+  fluegel: number;
+  kosten?: string;
+};
+
+export type GanzHaehnchenConfigResource = {
+  sollBrust: number;
+  sollKeule: number;
+  sollFluegel: number;
+};
+
+// ===== Brust-Zerlegung =====
+
+export type BrustEintragResource = {
+  id?: string;
+  datum: string;
+  zerlegerId: string;
+  zerlegerName: string;
+  anzahlKisten: number;
+  gewichtMitKnochen: number;
+  brustMitHaut: number;
+  brustOhneHaut: number;
+  haut: number;
+  kosten?: string;
+};
+
+export type BrustConfigResource = {
+  sollMitHaut: number;
+  sollOhneHaut: number;
+  sollHaut: number;
 };
 
 // ===== Buchhaltung: Offene Posten & Leergut =====
@@ -424,6 +471,7 @@ export type LeergutEintragResource = {
   importDatum: string;
   kundennr: string;
   kunde: string;
+  adresse?: string;
   artikel: string;
   alterBestand: number;
 };

@@ -135,6 +135,60 @@ leergutRouter.delete(
   }
 );
 
+// ── Buchungen (Leergutauswertung-PDFs pro Kunde) ──
+
+// GET /api/leergut/buchungen/:kundennr
+leergutRouter.get(
+  "/buchungen/:kundennr",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { getBuchungenByKunde } = await import("../services/LeergutService");
+      res.json(await getBuchungenByKunde(req.params.kundennr));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// POST /api/leergut/buchungen
+leergutRouter.post(
+  "/buchungen",
+  authenticate,
+  [
+    body("kundennr").isString().trim().notEmpty(),
+    body("kunde").isString().trim().notEmpty(),
+    body("filename").isString().trim().notEmpty(),
+    body("pdfBase64").isString().notEmpty(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { createBuchung } = await import("../services/LeergutService");
+      res.status(201).json(await createBuchung(req.body));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// DELETE /api/leergut/buchungen/:id
+leergutRouter.delete(
+  "/buchungen/:id",
+  authenticate,
+  [param("id").isMongoId()],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { deleteBuchung } = await import("../services/LeergutService");
+      await deleteBuchung(req.params.id);
+      res.json({ message: "Buchung gelöscht" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 // POST /api/leergut/send-email — Leergut-Bestätigung per E-Mail senden
 leergutRouter.post(
   "/send-email",
@@ -142,13 +196,19 @@ leergutRouter.post(
   [
     body("kundenEmail").isEmail().withMessage("Gültige E-Mail erforderlich"),
     body("kundenName").isString().trim().notEmpty(),
+    body("kundennr").optional().isString(),
     body("pdfBase64").isString().notEmpty().withMessage("PDF-Daten erforderlich"),
   ],
   validate,
   async (req: AuthRequest, res: Response) => {
     try {
       const { sendLeergutEmail } = await import("../services/EmailService");
-      await sendLeergutEmail(req.body);
+      const { getBuchungenPdfsForEmail } = await import("../services/LeergutService");
+      // Buchungs-PDFs automatisch laden
+      const buchungen = req.body.kundennr
+        ? await getBuchungenPdfsForEmail(req.body.kundennr)
+        : [];
+      await sendLeergutEmail({ ...req.body, buchungen });
       res.json({ message: "E-Mail gesendet" });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

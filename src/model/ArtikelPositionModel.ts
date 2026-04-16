@@ -84,6 +84,12 @@ artikelPositionSchema.pre(
   async function (next) {
     const position = this as IArtikelPosition;
 
+    // Leerzeilen (ohne Artikel) überspringen
+    if (!position.artikel) {
+      next();
+      return;
+    }
+
     // Artikel-Daten laden, um Gewicht je Einheit zu bestimmen
     const Artikel = mongoose.model("Artikel");
     const artikelData: any = await Artikel.findById(position.artikel);

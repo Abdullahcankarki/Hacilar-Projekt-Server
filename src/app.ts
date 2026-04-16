@@ -27,6 +27,8 @@ import { emailLogRouter } from './routes/EmailLogRoutes';
 import imageProxyRouter from './routes/ImageProxyRoutes';
 import gefluegelRouter from './routes/GefluegelRoutes';
 import puteRouter from './routes/PuteRoutes';
+import ganzHaehnchenRouter from './routes/GanzHaehnchenRoutes';
+import brustRouter from './routes/BrustRoutes';
 import offenePostenRouter from './routes/OffenePostenRoutes';
 import leergutBuchhaltungRouter from './routes/LeergutRoutes';
 
@@ -78,6 +80,8 @@ app.use("/api/stats", statsRouter);
 app.use("/api/email-logs", emailLogRouter);
 app.use("/api/gefluegel", gefluegelRouter);
 app.use("/api/pute", puteRouter);
+app.use("/api/ganz-haehnchen", ganzHaehnchenRouter);
+app.use("/api/brust", brustRouter);
 app.use("/api/offene-posten", offenePostenRouter);
 app.use("/api/leergut", leergutBuchhaltungRouter);
 app.use("/api", imageProxyRouter);

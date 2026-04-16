@@ -973,8 +973,9 @@ export async function sendLeergutEmail(data: {
   kundenEmail: string;
   kundenName: string;
   pdfBase64: string;
+  buchungen?: { filename: string; pdfBase64: string }[];
 }): Promise<void> {
-  const { kundenEmail, kundenName, pdfBase64 } = data;
+  const { kundenEmail, kundenName, pdfBase64, buchungen } = data;
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -998,13 +999,23 @@ export async function sendLeergutEmail(data: {
   ].join("\n");
 
   const subject = `Leergutaufstellung – ${kundenName} – Hacilar`;
-  const attachments = [
+  const attachments: nodemailer.SendMailOptions["attachments"] = [
     {
       filename: `Leergut_${kundenName.replace(/[^a-zA-Z0-9äöüÄÖÜß]/g, "_")}.pdf`,
       content: Buffer.from(pdfBase64, "base64"),
-      contentType: "application/pdf",
+      contentType: "application/pdf" as const,
     },
   ];
+  // Buchungs-PDFs (Leergutauswertungen) anhängen
+  if (buchungen && buchungen.length > 0) {
+    for (const b of buchungen) {
+      attachments.push({
+        filename: b.filename,
+        content: Buffer.from(b.pdfBase64, "base64"),
+        contentType: "application/pdf" as const,
+      });
+    }
+  }
 
   try {
     const messageId = await sendEmail(kundenEmail, subject, html, text, attachments);

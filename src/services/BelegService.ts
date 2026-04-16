@@ -685,6 +685,152 @@ async function renderRechnung(doc: PDFKitDocument, auftrag: any, kunde: any, opt
  * Für Gutschrift und Preisdifferenz müssen zusätzliche Daten übergeben werden.
  */
 
+/**
+ * Generiert ein Schnellauftrag-PDF mit Briefpapier-Hintergrund.
+ * Format: Bemerkung oben, Datum/Kunde/Kundennr, Tabelle (Menge | Einheit | Artikel | Preis €/kg).
+ * Menge, Einheit und Preis sind immer fett.
+ */
+export async function generateSchnellauftragPdf(auftragId: string): Promise<Buffer> {
+  const auftrag = await Auftrag.findById(auftragId);
+  if (!auftrag) throw new Error("Auftrag nicht gefunden");
+
+  const kunde = await Kunde.findById(auftrag.kunde);
+  if (!kunde) throw new Error("Kunde nicht gefunden");
+
+  // Positionen laden (Reihenfolge beibehalten)
+  const raw = Array.isArray(auftrag.artikelPosition) ? (auftrag.artikelPosition as any[]) : [];
+  const ids = raw.map((p: any) => toIdString(p)).filter(Boolean) as string[];
+  const positionen: ArtikelPositionResource[] = [];
+  for (const id of ids) {
+    try {
+      const pos = await getArtikelPositionById(id);
+      if (!pos.leergutVonPositionId) positionen.push(pos);
+    } catch { continue; }
+  }
+
+  const doc = new PDFDocument({ margin: 0, size: 'A4', autoFirstPage: true });
+  const buffers: Buffer[] = [];
+  doc.on("data", (chunk: Buffer) => buffers.push(chunk));
+
+  const pageW = 595.28;
+  const pageH = 841.89;
+  const CM = 28.3464567;
+
+  // --- Briefpapier-Hintergrund ---
+  const bgPath = path.join(__dirname, "../assets/auftrag-briefpapier.jpg");
+  try {
+    if (fs.existsSync(bgPath)) {
+      doc.image(bgPath, 0, 0, { width: pageW, height: pageH });
+    }
+  } catch {}
+
+  // --- Bemerkung oben (unter dem Logo-Bereich) ---
+  const contentStartY = 4.5 * CM; // ~4.5cm vom oberen Rand
+  const leftMargin = 2.5 * CM;
+  const rightMargin = 2 * CM;
+  const contentWidth = pageW - leftMargin - rightMargin;
+
+  let y = contentStartY;
+
+  // Auftragsbemerkung (groß, zentriert)
+  if (auftrag.bemerkungen && auftrag.bemerkungen.trim()) {
+    doc.font("Helvetica-Bold").fontSize(14)
+      .text(auftrag.bemerkungen.trim(), leftMargin, y, { width: contentWidth, align: 'center' });
+    y += doc.heightOfString(auftrag.bemerkungen.trim(), { width: contentWidth }) + 10;
+  }
+
+  // --- Datum / Kunde / Kundennr ---
+  y += 5;
+  const lieferdatum = auftrag.lieferdatum
+    ? new Date(auftrag.lieferdatum).toLocaleDateString("de-DE")
+    : new Date().toLocaleDateString("de-DE");
+
+  doc.font("Helvetica-Bold").fontSize(11).text("Datum:", leftMargin, y);
+  doc.font("Helvetica").fontSize(11).text(lieferdatum, leftMargin + 80, y);
+  y += 18;
+
+  doc.font("Helvetica-Bold").fontSize(11).text("Kunde:", leftMargin, y);
+  doc.font("Helvetica").fontSize(11).text(kunde.name || "—", leftMargin + 80, y);
+  y += 18;
+
+  doc.font("Helvetica-Bold").fontSize(11).text("Kundennr.:", leftMargin, y);
+  doc.font("Helvetica").fontSize(11).text((kunde as any).kundenNummer || "—", leftMargin + 80, y);
+  y += 25;
+
+  // --- Tabelle: Menge | Einheit | Artikel | Preis €/kg ---
+  const colX = [leftMargin, leftMargin + 60, leftMargin + 140, leftMargin + 320];
+  const colEnd = pageW - rightMargin;
+  const lineH = 16;
+
+  // Header
+  doc.font("Helvetica-Bold").fontSize(10);
+  doc.text("Menge", colX[0], y, { width: colX[1] - colX[0] - 4 });
+  doc.text("Einheit", colX[1], y, { width: colX[2] - colX[1] - 4 });
+  doc.text("Artikel", colX[2], y, { width: colX[3] - colX[2] - 4 });
+  doc.text("Preis €/kg", colX[3], y, { width: colEnd - colX[3] - 4, align: 'right' });
+
+  y += 14;
+  doc.moveTo(leftMargin, y).lineTo(colEnd, y).strokeColor('#000').lineWidth(0.5).stroke();
+  y += 6;
+
+  // Zeilen
+  for (const pos of positionen) {
+    // Leerzeile: kein Artikel
+    const isLeer = !pos.artikel || !pos.artikelName;
+
+    if (isLeer) {
+      y += lineH;
+      // Seitenumbruch prüfen
+      if (y > pageH - 3.5 * CM) {
+        doc.addPage();
+        try {
+          if (fs.existsSync(bgPath)) doc.image(bgPath, 0, 0, { width: pageW, height: pageH });
+        } catch {}
+        y = 3 * CM;
+      }
+      continue;
+    }
+
+    // Seitenumbruch prüfen
+    if (y + lineH > pageH - 3.5 * CM) {
+      doc.addPage();
+      try {
+        if (fs.existsSync(bgPath)) doc.image(bgPath, 0, 0, { width: pageW, height: pageH });
+      } catch {}
+      y = 3 * CM;
+    }
+
+    const mengeStr = typeof pos.menge === 'number' && pos.menge > 0 ? fmt2(pos.menge) : '';
+    const einheitStr = pos.einheit || '';
+    const artikelStr = pos.artikelName || '';
+    const preisStr = typeof pos.einzelpreis === 'number' && pos.einzelpreis > 0 ? euro(pos.einzelpreis) : '';
+
+    // Menge (fett)
+    doc.font("Helvetica-Bold").fontSize(10);
+    doc.text(mengeStr, colX[0], y, { width: colX[1] - colX[0] - 4 });
+
+    // Einheit (fett)
+    doc.text(einheitStr, colX[1], y, { width: colX[2] - colX[1] - 4 });
+
+    // Artikel (normal)
+    doc.font("Helvetica").fontSize(10);
+    doc.text(artikelStr, colX[2], y, { width: colX[3] - colX[2] - 4 });
+
+    // Preis (fett, rechts)
+    doc.font("Helvetica-Bold").fontSize(10);
+    doc.text(preisStr, colX[3], y, { width: colEnd - colX[3] - 4, align: 'right' });
+
+    y += lineH;
+  }
+
+  const pdfBuffer: Buffer = await new Promise((resolve, reject) => {
+    doc.on("end", () => resolve(Buffer.concat(buffers)));
+    doc.on("error", reject);
+    doc.end();
+  });
+  return pdfBuffer;
+}
+
 export async function generateBelegPdf(
   auftragId: string,
   belegTyp: BelegTyp,

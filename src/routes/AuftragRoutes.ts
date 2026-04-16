@@ -17,6 +17,7 @@ import {
   getTourInfosForAuftraege,
   createAuftragQuick,
   createAuftragComplete,
+  createAuftragCompleteMitPreis,
   getBestellteArtikelAggregiert,
   setAuftragInFertig,
 } from "../services/AuftragService";
@@ -136,6 +137,43 @@ auftragRouter.post(
         return res.status(403).json({ error: "Zugriff verweigert: Kunde stimmt nicht überein" });
       }
       const result = await createAuftragComplete(req.body);
+      res.status(201).json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /auftrag/complete-mit-preis
+ * Erstellt Auftrag + alle Positionen mit expliziten Preisen.
+ * Unterstützt Leerzeilen (leerzeile: true).
+ * Nur für Admins.
+ */
+auftragRouter.post(
+  "/complete-mit-preis",
+  authenticate,
+  [
+    body("kunde").isString().trim().notEmpty().isMongoId().withMessage("Ungültige Kunde-ID"),
+    body("lieferdatum").isISO8601().withMessage("Lieferdatum muss ein gültiges Datum sein"),
+    body("bemerkungen").optional().isString().trim(),
+    body("positionen").isArray({ min: 1 }).withMessage("Mindestens eine Position erforderlich"),
+    body("positionen.*.artikel").optional().isMongoId().withMessage("Ungültige Artikel-ID"),
+    body("positionen.*.menge").isFloat({ min: 0 }).withMessage("Menge muss >= 0 sein"),
+    body("positionen.*.einheit").isIn(["kg", "stück", "kiste", "karton"]).withMessage("Ungültige Einheit"),
+    body("positionen.*.einzelpreis").isFloat({ min: 0 }).withMessage("Einzelpreis muss >= 0 sein"),
+    body("positionen.*.zerlegung").optional().isBoolean(),
+    body("positionen.*.vakuum").optional().isBoolean(),
+    body("positionen.*.bemerkung").optional().isString().trim(),
+    body("positionen.*.leerzeile").optional().isBoolean(),
+  ],
+  validate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user?.role.includes("admin")) {
+        return res.status(403).json({ error: "Nur Admins dürfen Aufträge mit Preisen erstellen" });
+      }
+      const result = await createAuftragCompleteMitPreis(req.body);
       res.status(201).json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

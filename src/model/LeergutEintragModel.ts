@@ -5,6 +5,7 @@ export interface ILeergutEintrag {
   importDatum: Date;
   kundennr: string;
   kunde: string;
+  adresse?: string;
   artikel: string;
   alterBestand: number;
 }
@@ -15,6 +16,7 @@ const leergutEintragSchema = new Schema<ILeergutEintrag>(
     importDatum: { type: Date, required: true },
     kundennr: { type: String, required: true },
     kunde: { type: String, required: true },
+    adresse: { type: String, default: "" },
     artikel: { type: String, required: true },
     alterBestand: { type: Number, required: true },
   },

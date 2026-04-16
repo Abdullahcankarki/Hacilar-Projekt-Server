@@ -9,7 +9,7 @@ import { Kunde } from "../model/KundeModel";
 import { ArtikelModel } from "../model/ArtikelModel";
 import { ArtikelPositionResource, AuftragResource } from "../Resources"; // Pfad ggf. anpassen
 import { getArtikelById } from "../services/ArtikelService";
-import { createArtikelPosition } from "../services/ArtikelPositionService";
+import { createArtikelPosition, createArtikelPositionMitPreis } from "../services/ArtikelPositionService";
 import { Mitarbeiter } from "../model/MitarbeiterModel";
 import { Counter } from "../model/CounterModel";
 import {
@@ -394,6 +394,95 @@ export async function createAuftragComplete(data: {
   const resource = convertAuftragToResource(updatedAuftrag as unknown as IAuftrag, totals);
 
   // Alles weitere im Hintergrund – Client bekommt die Antwort sofort
+  (async () => {
+    try { await Auftrag.updateOne({ _id: auftragId }, { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }); } catch {}
+    if (savedAuftrag.lieferdatum) {
+      try { await onAuftragLieferdatumSet(auftragId); } catch {}
+    }
+    try { await syncReservierungenForAuftrag(auftragId); } catch {}
+    try { await computeBestandsWarnungenForAuftrag(auftragId); } catch {}
+    try { await onAuftragGewichtGeaendert(auftragId); } catch {}
+    if (parsedLieferdatum && kdoc?.email) {
+      try {
+        const pdfBuffer = await generateBelegPdf(auftragId, "auftragsbestaetigung");
+        const bestellDatum = DateTime.fromJSDate(savedAuftrag.createdAt ?? new Date()).setZone(ZONE).toFormat("dd.MM.yyyy");
+        const lieferDatumFormatted = DateTime.fromJSDate(parsedLieferdatum).setZone(ZONE).toFormat("dd.MM.yyyy");
+        await sendAuftragseingangEmail({
+          kundenEmail: kdoc.email,
+          kundenName: kdoc.name || "Kunde",
+          auftragId,
+          auftragNummer: savedAuftrag.auftragsnummer,
+          bestellDatum,
+          lieferDatum: lieferDatumFormatted,
+          pdfBuffer,
+        });
+      } catch (emailErr) {
+        console.error("[MAIL] Auftragsbestätigung konnte nicht gesendet werden:", emailErr);
+      }
+    }
+  })();
+
+  return resource;
+}
+
+/**
+ * Erstellt einen Auftrag + alle Positionen mit expliziten Preisen.
+ * Positionen können auch Leerzeilen (ohne Artikel) sein.
+ */
+export async function createAuftragCompleteMitPreis(data: {
+  kunde: string;
+  lieferdatum: string;
+  bemerkungen?: string;
+  positionen: {
+    artikel?: string;
+    menge: number;
+    einheit: "kg" | "stück" | "kiste" | "karton";
+    einzelpreis: number;
+    zerlegung?: boolean;
+    vakuum?: boolean;
+    bemerkung?: string;
+    leerzeile?: boolean;
+  }[];
+}): Promise<AuftragResource> {
+  const [neueNummer, kdoc] = await Promise.all([
+    generiereAuftragsnummer(),
+    Kunde.findById(data.kunde, { name: 1, email: 1 }).lean(),
+  ]);
+
+  const parsedLieferdatum = parseBerlinYmdToUtcDate(data.lieferdatum);
+
+  const newAuftrag = new Auftrag({
+    auftragsnummer: neueNummer,
+    kunde: data.kunde,
+    kundeName: kdoc?.name,
+    artikelPosition: [],
+    status: "offen",
+    lieferdatum: parsedLieferdatum,
+    bemerkungen: data.bemerkungen,
+  });
+  const savedAuftrag = await newAuftrag.save();
+  const auftragId = savedAuftrag._id.toString();
+
+  // Positionen sequentiell erstellen um Reihenfolge zu bewahren
+  for (const pos of data.positionen) {
+    await createArtikelPositionMitPreis({
+      artikel: pos.leerzeile ? undefined : pos.artikel,
+      menge: pos.menge,
+      einheit: pos.einheit,
+      einzelpreis: pos.einzelpreis,
+      auftragId,
+      zerlegung: pos.zerlegung ?? false,
+      vakuum: pos.vakuum ?? false,
+      bemerkung: pos.bemerkung ?? "",
+      leerzeile: pos.leerzeile,
+    });
+  }
+
+  const updatedAuftrag = await Auftrag.findById(auftragId).lean();
+  const totals = await computeTotals(updatedAuftrag as unknown as IAuftrag);
+  const resource = convertAuftragToResource(updatedAuftrag as unknown as IAuftrag, totals);
+
+  // Hintergrund-Tasks
   (async () => {
     try { await Auftrag.updateOne({ _id: auftragId }, { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }); } catch {}
     if (savedAuftrag.lieferdatum) {

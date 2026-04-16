@@ -526,6 +526,163 @@ export async function createArtikelPosition(data: {
 }
 
 /**
+ * Erstellt eine Artikelposition mit explizitem Einzelpreis (EUR/kg).
+ * Der Preis wird direkt übernommen – keine Berechnung über Basispreis + Kundenaufpreis.
+ * Unterstützt auch Leerzeilen (ohne Artikel) für Druckformatierung.
+ */
+export async function createArtikelPositionMitPreis(data: {
+  artikel?: string;
+  menge: number;
+  einheit: Einheit;
+  einzelpreis: number;
+  auftragId: string;
+  zerlegung?: boolean;
+  vakuum?: boolean;
+  bemerkung?: string;
+  leerzeile?: boolean;
+}): Promise<ArtikelPositionResource> {
+  if (!isEinheit(data.einheit)) {
+    throw new Error("Ungültige Einheit.");
+  }
+
+  const auftrag = await Auftrag.findById(data.auftragId);
+  if (!auftrag) {
+    throw new Error("Auftrag nicht gefunden.");
+  }
+
+  // --- Leerzeile: Position ohne Artikel, nur als Platzhalter ---
+  if (data.leerzeile || !data.artikel) {
+    const newPosition = new ArtikelPosition({
+      artikel: undefined,
+      artikelName: "",
+      menge: 0,
+      einheit: "kg",
+      einzelpreis: 0,
+      gesamtgewicht: 0,
+      gesamtpreis: 0,
+      auftragId: data.auftragId,
+      bemerkung: (data.bemerkung || "").trim(),
+    });
+    const saved = await newPosition.save();
+    await Auftrag.findByIdAndUpdate(auftrag._id, {
+      $addToSet: { artikelPosition: saved._id },
+    });
+    return {
+      id: saved._id.toString(),
+      artikel: "",
+      artikelName: "",
+      auftragId: saved.auftragId?.toString(),
+      menge: 0,
+      einheit: "kg",
+      einzelpreis: 0,
+      zerlegung: false,
+      vakuum: false,
+      bemerkung: saved.bemerkung,
+      gesamtgewicht: 0,
+      gesamtpreis: 0,
+      erfassungsModus: "GEWICHT",
+    };
+  }
+
+  // --- Normale Position mit explizitem Preis ---
+  if (data.menge === undefined || data.menge === null || data.menge <= 0) {
+    throw new Error("Menge muss größer als 0 sein.");
+  }
+
+  const artikel = await ArtikelModel.findById(data.artikel);
+  if (!artikel) {
+    throw new Error("Artikel nicht gefunden.");
+  }
+
+  const einzelpreis = round2(data.einzelpreis);
+  const gesamtgewicht = computeGesamtgewicht(artikel, data.menge, data.einheit);
+  const gesamtpreis = round2(einzelpreis * gesamtgewicht);
+
+  const newPosition = new ArtikelPosition({
+    artikel: artikel._id,
+    artikelName: artikel.name,
+    menge: data.menge,
+    einheit: data.einheit,
+    zerlegung: data.zerlegung ?? false,
+    vakuum: data.vakuum ?? false,
+    bemerkung: (data.bemerkung || "").trim(),
+    einzelpreis,
+    gesamtgewicht,
+    gesamtpreis,
+    auftragId: data.auftragId,
+    erfassungsModus: artikel.erfassungsModus ?? "GEWICHT",
+  });
+
+  const savedPosition = await newPosition.save();
+
+  // --- Auftrag verknüpfen + ggf. Zerlegeauftrag ---
+  await Auftrag.findByIdAndUpdate(auftrag._id, {
+    $addToSet: { artikelPosition: savedPosition._id },
+  });
+
+  if (data.zerlegung) {
+    let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
+      auftragId: auftrag._id,
+      archiviert: false,
+    });
+    const kundenName = (auftrag as any).kunde?.name || "Unbekannt";
+
+    if (zerlegeauftrag) {
+      zerlegeauftrag.artikelPositionen.push({
+        artikelPositionId: savedPosition._id.toString(),
+        artikelName: savedPosition.artikelName,
+        menge: savedPosition.gesamtgewicht,
+        status: "offen",
+        bemerkung: "",
+      });
+      await zerlegeauftrag.save();
+    } else {
+      await ZerlegeAuftragModel.create({
+        auftragId: auftrag._id.toString(),
+        kundenName,
+        artikelPositionen: [
+          {
+            artikelPositionId: savedPosition._id.toString(),
+            artikelName: savedPosition.artikelName,
+            menge: savedPosition.gesamtgewicht,
+            status: "offen",
+            bemerkung: "",
+          },
+        ],
+        erstelltAm: new Date(),
+        archiviert: false,
+      });
+    }
+  }
+
+  return {
+    id: savedPosition._id.toString(),
+    artikel: savedPosition.artikel.toString(),
+    artikelName: savedPosition.artikelName,
+    auftragId: savedPosition.auftragId?.toString(),
+    menge: savedPosition.menge,
+    einheit: savedPosition.einheit,
+    einzelpreis: savedPosition.einzelpreis,
+    zerlegung: savedPosition.zerlegung,
+    vakuum: savedPosition.vakuum,
+    bemerkung: savedPosition.bemerkung,
+    gesamtgewicht: savedPosition.gesamtgewicht,
+    gesamtpreis: savedPosition.gesamtpreis,
+    kommissioniertMenge: savedPosition.kommissioniertMenge,
+    kommissioniertEinheit: savedPosition.kommissioniertEinheit,
+    kommissioniertBemerkung: savedPosition.kommissioniertBemerkung,
+    kommissioniertVon: savedPosition.kommissioniertVon?.toString(),
+    kommissioniertVonName: savedPosition.kommissioniertVonName,
+    kommissioniertAm: savedPosition.kommissioniertAm,
+    bruttogewicht: savedPosition.bruttogewicht,
+    leergut: savedPosition.leergut || [],
+    nettogewicht: savedPosition.nettogewicht,
+    chargennummern: savedPosition.chargennummern || [],
+    erfassungsModus: savedPosition.erfassungsModus ?? "GEWICHT",
+  };
+}
+
+/**
  * Ruft eine Artikelposition anhand der ID ab.
  */
 export async function getArtikelPositionById(

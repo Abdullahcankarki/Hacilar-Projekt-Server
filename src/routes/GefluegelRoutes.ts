@@ -143,7 +143,7 @@ gefluegelRouter.post(
   [
     body("name").isString().trim().notEmpty().withMessage("Name ist erforderlich"),
     body("kategorien").optional().isArray(),
-    body("kategorien.*").optional().isIn(["haehnchen", "pute_fluegel", "pute_keule"]),
+    body("kategorien.*").optional().isIn(["haehnchen", "pute_fluegel", "pute_keule", "ganz_haehnchen", "brust"]),
     body("aktiv").optional().isBoolean(),
     body("reihenfolge").optional().isInt(),
   ],
@@ -164,7 +164,7 @@ gefluegelRouter.put(
     param("id").isMongoId().withMessage("Ungültige ID"),
     body("name").optional().isString().trim().notEmpty(),
     body("kategorien").optional().isArray(),
-    body("kategorien.*").optional().isIn(["haehnchen", "pute_fluegel", "pute_keule"]),
+    body("kategorien.*").optional().isIn(["haehnchen", "pute_fluegel", "pute_keule", "ganz_haehnchen", "brust"]),
     body("aktiv").optional().isBoolean(),
     body("reihenfolge").optional().isInt(),
   ],

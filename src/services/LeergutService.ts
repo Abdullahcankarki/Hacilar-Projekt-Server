@@ -1,5 +1,6 @@
 import { LeergutImport } from "../model/LeergutImportModel";
 import { LeergutEintrag } from "../model/LeergutEintragModel";
+import { LeergutBuchung } from "../model/LeergutBuchungModel";
 import {
   LeergutImportResource,
   LeergutEintragResource,
@@ -23,6 +24,7 @@ function eintragToResource(doc: any): LeergutEintragResource {
     importDatum: doc.importDatum.toISOString(),
     kundennr: doc.kundennr,
     kunde: doc.kunde,
+    adresse: doc.adresse || "",
     artikel: doc.artikel,
     alterBestand: doc.alterBestand,
   };
@@ -56,6 +58,7 @@ export async function createImport(data: {
   eintraege: {
     kundennr: string;
     kunde: string;
+    adresse?: string;
     artikel: string;
     alterBestand: number;
   }[];
@@ -77,6 +80,7 @@ export async function createImport(data: {
       importDatum: now,
       kundennr: e.kundennr,
       kunde: e.kunde,
+      adresse: e.adresse || "",
       artikel: e.artikel,
       alterBestand: e.alterBestand,
     }));
@@ -94,5 +98,55 @@ export async function deleteImport(importId: string): Promise<void> {
 
 export async function deleteKundeEintraege(kundennr: string): Promise<{ deleted: number }> {
   const result = await LeergutEintrag.deleteMany({ kundennr });
+  await LeergutBuchung.deleteMany({ kundennr });
   return { deleted: result.deletedCount };
+}
+
+// ── Buchungen (PDF-Anhänge) ──
+
+export async function getBuchungenByKunde(kundennr: string) {
+  const docs = await LeergutBuchung.find({ kundennr }).sort({ uploadDatum: -1 });
+  return docs.map((d) => ({
+    id: d._id.toString(),
+    kundennr: d.kundennr,
+    kunde: d.kunde,
+    filename: d.filename,
+    uploadDatum: d.uploadDatum.toISOString(),
+  }));
+}
+
+export async function getBuchungPdf(id: string): Promise<string | null> {
+  const doc = await LeergutBuchung.findById(id);
+  return doc?.pdfBase64 || null;
+}
+
+export async function createBuchung(data: {
+  kundennr: string;
+  kunde: string;
+  filename: string;
+  pdfBase64: string;
+}) {
+  const doc = await LeergutBuchung.create({
+    kundennr: data.kundennr,
+    kunde: data.kunde,
+    filename: data.filename,
+    pdfBase64: data.pdfBase64,
+    uploadDatum: new Date(),
+  });
+  return {
+    id: doc._id.toString(),
+    kundennr: doc.kundennr,
+    kunde: doc.kunde,
+    filename: doc.filename,
+    uploadDatum: doc.uploadDatum.toISOString(),
+  };
+}
+
+export async function deleteBuchung(id: string): Promise<void> {
+  await LeergutBuchung.findByIdAndDelete(id);
+}
+
+export async function getBuchungenPdfsForEmail(kundennr: string): Promise<{ filename: string; pdfBase64: string }[]> {
+  const docs = await LeergutBuchung.find({ kundennr });
+  return docs.map((d) => ({ filename: d.filename, pdfBase64: d.pdfBase64 }));
 }

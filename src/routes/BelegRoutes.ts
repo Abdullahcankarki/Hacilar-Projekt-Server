@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import { body, param } from "express-validator";
 import {
   generateBelegPdf,
+  generateSchnellauftragPdf,
   addBelegToAuftrag,
   logEmailVersand,
   getBelegeForAuftrag,
@@ -18,6 +19,24 @@ export const belegRouter = express.Router();
  * Für Rechnung und Lieferschein: Daten aus Auftrag.
  * Für Gutschrift und Preisdifferenz: Input erforderlich.
  */
+/**
+ * Schnellauftrag-PDF mit Briefpapier-Hintergrund
+ */
+belegRouter.post(
+  "/:auftragId/schnellauftrag/pdf",
+  [param("auftragId").isString().notEmpty()],
+  validate,
+  async (req: Request, res: Response) => {
+    try {
+      const pdfBuffer = await generateSchnellauftragPdf(req.params.auftragId);
+      res.setHeader("Content-Type", "application/pdf");
+      res.send(pdfBuffer);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
 belegRouter.post(
   "/:auftragId/:typ/pdf",
   [
