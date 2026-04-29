@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import app from "./app";
 import { logger } from "./logger";
 import { initTelegramBot } from "./telegram/bot";
+import { startupCheck as licenseStartupCheck } from "./license/manager";
 
 async function setup() {
   let mongodURI = process.env.DB_CONNECTION_STRING;
@@ -26,6 +27,8 @@ async function setup() {
 
   logger.info(`Connect to mongod`);
   await mongoose.connect(mongodURI);
+
+  await licenseStartupCheck();
 
   const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
   const httpServer = http.createServer(app);

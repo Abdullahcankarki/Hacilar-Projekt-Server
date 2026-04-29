@@ -18,6 +18,8 @@ coverage
 # mongodb
 mongodata
 mongodatatest
+# license state
+.license
 # Submission file
 abgabe*.zip
 # ignore log files

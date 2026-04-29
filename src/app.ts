@@ -31,6 +31,8 @@ import ganzHaehnchenRouter from './routes/GanzHaehnchenRoutes';
 import brustRouter from './routes/BrustRoutes';
 import offenePostenRouter from './routes/OffenePostenRoutes';
 import leergutBuchhaltungRouter from './routes/LeergutRoutes';
+import licenseRouter from './routes/LicenseRoutes';
+import { licenseGuard } from './middleware/licenseGuard';
 
 const app = express();
 
@@ -55,6 +57,10 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '2mb' })); // oder mehr, je nach Bedarf
+
+app.use("/api/license", licenseRouter);
+app.use(licenseGuard);
+
 app.use('/api', samsara);
 app.use("/api/artikel", artikelRouter);
 app.use("/api/artikelPosition", artikelPositionRouter);
