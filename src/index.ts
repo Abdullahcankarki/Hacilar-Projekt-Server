@@ -8,7 +8,7 @@ import mongoose from "mongoose";
 import app from "./app";
 import { logger } from "./logger";
 import { initTelegramBot } from "./telegram/bot";
-import { startupCheck as licenseStartupCheck } from "./license/manager";
+import { startupCheck as licenseStartupCheck, getStatus as getLicenseStatus } from "./license/manager";
 
 async function setup() {
   let mongodURI = process.env.DB_CONNECTION_STRING;
@@ -29,6 +29,10 @@ async function setup() {
   await mongoose.connect(mongodURI);
 
   await licenseStartupCheck();
+  const ls = getLicenseStatus();
+  logger.info(
+    `License: status=${ls.status}` + (ls.validUntil ? `, validUntil=${ls.validUntil}` : "")
+  );
 
   const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
   const httpServer = http.createServer(app);

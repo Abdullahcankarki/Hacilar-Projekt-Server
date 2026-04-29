@@ -14,3 +14,9 @@ export function getAppSecret(): string {
   }
   return secret;
 }
+
+export function getLicenseKeyFromEnv(): string | null {
+  const raw = process.env.LICENSE_KEY?.trim().toUpperCase();
+  if (raw && LICENSE_KEY_REGEX.test(raw)) return raw;
+  return null;
+}

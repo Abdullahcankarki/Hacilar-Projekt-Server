@@ -1,4 +1,4 @@
-import { OFFLINE_GRACE_MS, REVALIDATE_INTERVAL_MS } from "./constants";
+import { OFFLINE_GRACE_MS, REVALIDATE_INTERVAL_MS, getLicenseKeyFromEnv } from "./constants";
 import { logLicenseEvent } from "./errorLogger";
 import { readState, writeState, LicenseState } from "./state";
 import { callServerValidate, LicenseError, verifyToken } from "./validator";
@@ -57,6 +57,10 @@ function localCheck(state: LicenseState): boolean {
   return true;
 }
 
+function pickLicenseKey(state: LicenseState | null): string | null {
+  return getLicenseKeyFromEnv() ?? state?.licenseKey ?? null;
+}
+
 async function runValidate(licenseKey: string): Promise<LicenseState> {
   const success = await callServerValidate(licenseKey);
   verifyToken(success.token, { ignoreExpiration: false });
@@ -91,35 +95,30 @@ export async function activate(licenseKey: string): Promise<void> {
 
 export async function startupCheck(): Promise<void> {
   const state = readState();
-  if (!state) {
+  const key = pickLicenseKey(state);
+
+  if (!key) {
     setStatus({ status: "uninitialized", hasKey: false });
     logLicenseEvent("startup_no_key");
     return;
   }
 
-  if (localCheck(state)) {
-    setStatus({ status: "valid", validUntil: state.validUntil, hasKey: true });
-    logLicenseEvent("startup_local_ok", { licenseKey: state.licenseKey });
-    scheduleRevalidation();
-    return;
-  }
-
   try {
-    const refreshed = await runValidate(state.licenseKey);
+    const refreshed = await runValidate(key);
     setStatus({ status: "valid", validUntil: refreshed.validUntil, hasKey: true });
-    logLicenseEvent("startup_revalidate_success", { licenseKey: state.licenseKey });
+    logLicenseEvent("startup_validate_success", { licenseKey: key });
   } catch (err) {
     const isNetwork = err instanceof LicenseError && err.category === "network";
-    if (isNetwork && isFresh(state.lastValidatedAt)) {
+    if (isNetwork && state && state.licenseKey === key && localCheck(state)) {
       setStatus({ status: "valid", validUntil: state.validUntil, hasKey: true });
       logLicenseEvent("startup_offline_grace", {
-        licenseKey: state.licenseKey,
+        licenseKey: key,
         reason: (err as LicenseError).reason,
       });
     } else {
-      setStatus({ status: "invalid", validUntil: state.validUntil, hasKey: true });
-      logLicenseEvent("startup_revalidate_failed", {
-        licenseKey: state.licenseKey,
+      setStatus({ status: "invalid", validUntil: state?.validUntil, hasKey: true });
+      logLicenseEvent("startup_validate_failed", {
+        licenseKey: key,
         reason: err instanceof LicenseError ? err.reason : (err as Error).message,
       });
     }
@@ -129,26 +128,27 @@ export async function startupCheck(): Promise<void> {
 
 async function periodicRevalidate(): Promise<void> {
   const state = readState();
-  if (!state) {
+  const key = pickLicenseKey(state);
+  if (!key) {
     setStatus({ status: "uninitialized", hasKey: false });
     return;
   }
   try {
-    const refreshed = await runValidate(state.licenseKey);
+    const refreshed = await runValidate(key);
     setStatus({ status: "valid", validUntil: refreshed.validUntil, hasKey: true });
-    logLicenseEvent("periodic_revalidate_success", { licenseKey: state.licenseKey });
+    logLicenseEvent("periodic_revalidate_success", { licenseKey: key });
   } catch (err) {
     const isNetwork = err instanceof LicenseError && err.category === "network";
-    if (isNetwork && isFresh(state.lastValidatedAt)) {
+    if (isNetwork && state && state.licenseKey === key && isFresh(state.lastValidatedAt)) {
       logLicenseEvent("periodic_offline_grace", {
-        licenseKey: state.licenseKey,
+        licenseKey: key,
         reason: (err as LicenseError).reason,
       });
       return;
     }
-    setStatus({ status: "invalid", validUntil: state.validUntil, hasKey: true });
+    setStatus({ status: "invalid", validUntil: state?.validUntil, hasKey: true });
     logLicenseEvent("periodic_revalidate_failed", {
-      licenseKey: state.licenseKey,
+      licenseKey: key,
       reason: err instanceof LicenseError ? err.reason : (err as Error).message,
     });
   }

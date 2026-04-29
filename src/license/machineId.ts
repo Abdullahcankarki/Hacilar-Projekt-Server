@@ -8,6 +8,12 @@ let cached: string | null = null;
 export function getMachineId(): string {
   if (cached) return cached;
 
+  const fromEnv = process.env.LICENSE_MACHINE_ID?.trim();
+  if (fromEnv && fromEnv.length >= 8) {
+    cached = fromEnv;
+    return fromEnv;
+  }
+
   ensureLicenseDir();
 
   if (fs.existsSync(MACHINE_ID_FILE)) {
