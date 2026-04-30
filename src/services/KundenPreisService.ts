@@ -121,6 +121,31 @@ export async function getKundenPreis(
 }
 
 /**
+ * Lädt Aufpreise für mehrere Artikel eines Kunden in einem einzigen Query.
+ * Gibt eine Map artikelId -> aufpreis zurück. Fehlende Einträge fehlen auch in der Map.
+ */
+export async function getKundenAufpreiseMap(
+  kundenId: string,
+  artikelIds: string[]
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (!kundenId || !artikelIds.length) return map;
+  const uniqueIds = Array.from(new Set(artikelIds.filter(Boolean)));
+  if (!uniqueIds.length) return map;
+  const entries = await KundenPreisModel.find({
+    customer: kundenId,
+    artikel: { $in: uniqueIds },
+  })
+    .select({ artikel: 1, aufpreis: 1 })
+    .lean()
+    .exec();
+  for (const e of entries as any[]) {
+    map.set(String(e.artikel), Number(e.aufpreis) || 0);
+  }
+  return map;
+}
+
+/**
  * Ruft alle kundenspezifischen Preise ab.
  */
 export async function getAllKundenPreise(): Promise<KundenPreisResource[]> {

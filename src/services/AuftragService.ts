@@ -29,6 +29,7 @@ import { createReservierung, updateReservierung, cancelReservierung, listReservi
 import { BestandAggModel } from "../model/BestandsAggModel";
 import { sendAuftragseingangEmail } from "./EmailService";
 import { generateBelegPdf } from "./BelegService";
+import { getKundenAufpreiseMap } from "./KundenPreisService";
 
 const ZONE = "Europe/Berlin" as const;
 const DEBUG_BESTELLTE = process.env.DEBUG_BESTELLTE_ARTIKEL === "1";
@@ -337,6 +338,148 @@ export async function createAuftrag(data: {
 }
 
 /**
+ * Verknüpft mehrere Positionen mit dem Auftrag (ein einziger Write) und erzeugt/erweitert
+ * ggf. den zugehörigen Zerlegeauftrag in einer aggregierten Operation.
+ */
+async function linkPositionenAndZerlegeauftrag(params: {
+  auftragId: string;
+  positionIds: string[];
+  zerlegePositionen: Array<{
+    positionId: string;
+    artikelName: string;
+    gesamtgewicht: number;
+    bemerkung?: string;
+  }>;
+  kundenName: string;
+}): Promise<void> {
+  const { auftragId, positionIds, zerlegePositionen, kundenName } = params;
+
+  if (positionIds.length) {
+    const objectIds = positionIds.map((id) => new mongoose.Types.ObjectId(id));
+    await Auftrag.findByIdAndUpdate(auftragId, {
+      $addToSet: { artikelPosition: { $each: objectIds } },
+    });
+  }
+
+  if (zerlegePositionen.length) {
+    const neueEintraege = zerlegePositionen.map((p) => ({
+      artikelPositionId: p.positionId,
+      artikelName: p.artikelName,
+      menge: p.gesamtgewicht,
+      status: "offen" as const,
+      bemerkung: p.bemerkung,
+    }));
+    const existing = await ZerlegeAuftragModel.findOne({
+      auftragId,
+      archiviert: false,
+    });
+    if (existing) {
+      existing.artikelPositionen.push(...neueEintraege);
+      await existing.save();
+    } else {
+      await ZerlegeAuftragModel.create({
+        auftragId,
+        kundenName,
+        artikelPositionen: neueEintraege,
+        erstelltAm: new Date(),
+        archiviert: false,
+      });
+    }
+  }
+}
+
+/**
+ * Führt die vom Client nicht benötigten Folgearbeiten eines neu erstellten Auftrags aus.
+ * Parallelisiert alle voneinander unabhängigen Schritte und berücksichtigt die bekannten
+ * Abhängigkeiten (Gewicht/Preis -> Tour-Kette -> onAuftragGewichtGeaendert).
+ */
+async function runAuftragPostProcessing(params: {
+  auftragId: string;
+  totalWeight: number;
+  totalPrice: number;
+  lieferdatum?: Date;
+  bestellDatumJs: Date;
+  auftragsnummer: string;
+  kundenEmail?: string;
+  kundenName?: string;
+}): Promise<void> {
+  const {
+    auftragId,
+    totalWeight,
+    totalPrice,
+    lieferdatum,
+    bestellDatumJs,
+    auftragsnummer,
+    kundenEmail,
+    kundenName,
+  } = params;
+
+  // 1) Gewicht/Preis persistieren – muss vor onAuftragGewichtGeaendert und PDF laufen.
+  try {
+    await Auftrag.updateOne(
+      { _id: auftragId },
+      { $set: { gewicht: totalWeight, preis: totalPrice } }
+    );
+  } catch {}
+
+  // 2) Voneinander unabhängige Folgearbeiten parallel starten.
+  //    Tour-Kette ist intern sequentiell (Lieferdatum -> Gewichtsänderung),
+  //    Reservierung/Bestand/PDF laufen unabhängig daneben.
+  const tourChain = (async () => {
+    if (lieferdatum) {
+      try { await onAuftragLieferdatumSet(auftragId); } catch {}
+    }
+    try { await onAuftragGewichtGeaendert(auftragId); } catch {}
+  })();
+
+  const reservChain = (async () => {
+    try { await syncReservierungenForAuftrag(auftragId); } catch {}
+  })();
+
+  const bestandChain = (async () => {
+    try { await computeBestandsWarnungenForAuftrag(auftragId); } catch {}
+  })();
+
+  const pdfChain: Promise<Buffer | null> =
+    lieferdatum && kundenEmail
+      ? generateBelegPdf(auftragId, "auftragsbestaetigung").catch((err) => {
+          console.error("[PDF] Auftragsbestätigung konnte nicht erzeugt werden:", err);
+          return null;
+        })
+      : Promise.resolve(null);
+
+  const [, , , pdfBuffer] = await Promise.all([
+    tourChain,
+    reservChain,
+    bestandChain,
+    pdfChain,
+  ]);
+
+  // 3) E-Mail erst versenden, wenn PDF bereit ist.
+  if (pdfBuffer && lieferdatum && kundenEmail) {
+    try {
+      const bestellDatum = DateTime.fromJSDate(bestellDatumJs)
+        .setZone(ZONE)
+        .toFormat("dd.MM.yyyy");
+      const lieferDatumFormatted = DateTime.fromJSDate(lieferdatum)
+        .setZone(ZONE)
+        .toFormat("dd.MM.yyyy");
+      await sendAuftragseingangEmail({
+        kundenEmail,
+        kundenName: kundenName || "Kunde",
+        auftragId,
+        auftragNummer: auftragsnummer,
+        bestellDatum,
+        lieferDatum: lieferDatumFormatted,
+        pdfBuffer,
+      });
+    } catch (emailErr) {
+      console.error("[MAIL] Auftragsbestätigung konnte nicht gesendet werden:", emailErr);
+    }
+  }
+}
+
+/**
  * Erstellt einen Auftrag + alle Positionen in einem einzigen Aufruf.
  * Spart 2 HTTP-Roundtrips gegenüber dem klassischen 3-Schritt-Flow.
  */
@@ -353,10 +496,12 @@ export async function createAuftragComplete(data: {
     bemerkung?: string;
   }[];
 }): Promise<AuftragResource> {
-  // Auftragsnummer + Kundendaten parallel laden
-  const [neueNummer, kdoc] = await Promise.all([
+  // Auftragsnummer + Kundendaten + alle Aufpreise dieses Kunden parallel laden
+  const artikelIds = data.positionen.map((p) => p.artikel).filter(Boolean);
+  const [neueNummer, kdoc, aufpreisMap] = await Promise.all([
     generiereAuftragsnummer(),
     Kunde.findById(data.kunde, { name: 1, email: 1 }).lean(),
+    getKundenAufpreiseMap(data.kunde, artikelIds),
   ]);
 
   const parsedLieferdatum = parseBerlinYmdToUtcDate(data.lieferdatum);
@@ -373,8 +518,9 @@ export async function createAuftragComplete(data: {
   const savedAuftrag = await newAuftrag.save();
   const auftragId = savedAuftrag._id.toString();
 
-  // Alle Positionen parallel erstellen – jede verknüpft sich selbst per $addToSet
-  await Promise.all(
+  // Alle Positionen parallel erstellen – ohne per-Position $addToSet und
+  // ohne per-Position Zerlegeauftrag-Race-Condition; beides übernehmen wir aggregiert.
+  const createdPositions = await Promise.all(
     data.positionen.map((pos) =>
       createArtikelPosition({
         artikel: pos.artikel,
@@ -384,9 +530,33 @@ export async function createAuftragComplete(data: {
         vakuum: pos.vakuum ?? false,
         bemerkung: pos.bemerkung ?? "",
         auftragId,
+        _skipAuftragLink: true,
+        _skipZerlegeAuftrag: true,
+        _aufpreisOverride: aufpreisMap.get(pos.artikel) ?? 0,
       })
     )
   );
+
+  // Einmalig verknüpfen + Zerlegeauftrag aggregiert erzeugen
+  const positionIds = createdPositions
+    .map((p) => p.id)
+    .filter((id): id is string => !!id);
+  const zerlegePositionen = createdPositions
+    .map((p, i) => ({ p, src: data.positionen[i] }))
+    .filter(({ p, src }) => src.zerlegung && !!p.id)
+    .map(({ p }) => ({
+      positionId: p.id as string,
+      artikelName: p.artikelName ?? "",
+      gesamtgewicht: p.gesamtgewicht,
+      bemerkung: undefined as string | undefined,
+    }));
+
+  await linkPositionenAndZerlegeauftrag({
+    auftragId,
+    positionIds,
+    zerlegePositionen,
+    kundenName: kdoc?.name || "Unbekannt",
+  });
 
   // Totals berechnen – wird für die Antwort gebraucht
   const updatedAuftrag = await Auftrag.findById(auftragId).lean();
@@ -394,33 +564,16 @@ export async function createAuftragComplete(data: {
   const resource = convertAuftragToResource(updatedAuftrag as unknown as IAuftrag, totals);
 
   // Alles weitere im Hintergrund – Client bekommt die Antwort sofort
-  (async () => {
-    try { await Auftrag.updateOne({ _id: auftragId }, { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }); } catch {}
-    if (savedAuftrag.lieferdatum) {
-      try { await onAuftragLieferdatumSet(auftragId); } catch {}
-    }
-    try { await syncReservierungenForAuftrag(auftragId); } catch {}
-    try { await computeBestandsWarnungenForAuftrag(auftragId); } catch {}
-    try { await onAuftragGewichtGeaendert(auftragId); } catch {}
-    if (parsedLieferdatum && kdoc?.email) {
-      try {
-        const pdfBuffer = await generateBelegPdf(auftragId, "auftragsbestaetigung");
-        const bestellDatum = DateTime.fromJSDate(savedAuftrag.createdAt ?? new Date()).setZone(ZONE).toFormat("dd.MM.yyyy");
-        const lieferDatumFormatted = DateTime.fromJSDate(parsedLieferdatum).setZone(ZONE).toFormat("dd.MM.yyyy");
-        await sendAuftragseingangEmail({
-          kundenEmail: kdoc.email,
-          kundenName: kdoc.name || "Kunde",
-          auftragId,
-          auftragNummer: savedAuftrag.auftragsnummer,
-          bestellDatum,
-          lieferDatum: lieferDatumFormatted,
-          pdfBuffer,
-        });
-      } catch (emailErr) {
-        console.error("[MAIL] Auftragsbestätigung konnte nicht gesendet werden:", emailErr);
-      }
-    }
-  })();
+  void runAuftragPostProcessing({
+    auftragId,
+    totalWeight: totals.totalWeight,
+    totalPrice: totals.totalPrice,
+    lieferdatum: parsedLieferdatum,
+    bestellDatumJs: savedAuftrag.createdAt ?? new Date(),
+    auftragsnummer: savedAuftrag.auftragsnummer,
+    kundenEmail: kdoc?.email,
+    kundenName: kdoc?.name,
+  });
 
   return resource;
 }
@@ -463,53 +616,60 @@ export async function createAuftragCompleteMitPreis(data: {
   const savedAuftrag = await newAuftrag.save();
   const auftragId = savedAuftrag._id.toString();
 
-  // Positionen sequentiell erstellen um Reihenfolge zu bewahren
-  for (const pos of data.positionen) {
-    await createArtikelPositionMitPreis({
-      artikel: pos.leerzeile ? undefined : pos.artikel,
-      menge: pos.menge,
-      einheit: pos.einheit,
-      einzelpreis: pos.einzelpreis,
-      auftragId,
-      zerlegung: pos.zerlegung ?? false,
-      vakuum: pos.vakuum ?? false,
-      bemerkung: pos.bemerkung ?? "",
-      leerzeile: pos.leerzeile,
-    });
-  }
+  // Positionen parallel erstellen ohne per-Position $addToSet/Zerlegeauftrag.
+  // Promise.all bewahrt die Array-Reihenfolge (entscheidend wegen Leerzeilen).
+  const createdPositions = await Promise.all(
+    data.positionen.map((pos) =>
+      createArtikelPositionMitPreis({
+        artikel: pos.leerzeile ? undefined : pos.artikel,
+        menge: pos.menge,
+        einheit: pos.einheit,
+        einzelpreis: pos.einzelpreis,
+        auftragId,
+        zerlegung: pos.zerlegung ?? false,
+        vakuum: pos.vakuum ?? false,
+        bemerkung: pos.bemerkung ?? "",
+        leerzeile: pos.leerzeile,
+        _skipAuftragLink: true,
+        _skipZerlegeAuftrag: true,
+      })
+    )
+  );
+
+  const positionIds = createdPositions
+    .map((p) => p.id)
+    .filter((id): id is string => !!id);
+  const zerlegePositionen = createdPositions
+    .map((p, i) => ({ p, src: data.positionen[i] }))
+    .filter(({ p, src }) => src.zerlegung && !src.leerzeile && !!p.id)
+    .map(({ p }) => ({
+      positionId: p.id as string,
+      artikelName: p.artikelName ?? "",
+      gesamtgewicht: p.gesamtgewicht,
+      bemerkung: "",
+    }));
+
+  await linkPositionenAndZerlegeauftrag({
+    auftragId,
+    positionIds,
+    zerlegePositionen,
+    kundenName: kdoc?.name || "Unbekannt",
+  });
 
   const updatedAuftrag = await Auftrag.findById(auftragId).lean();
   const totals = await computeTotals(updatedAuftrag as unknown as IAuftrag);
   const resource = convertAuftragToResource(updatedAuftrag as unknown as IAuftrag, totals);
 
-  // Hintergrund-Tasks
-  (async () => {
-    try { await Auftrag.updateOne({ _id: auftragId }, { $set: { gewicht: totals.totalWeight, preis: totals.totalPrice } }); } catch {}
-    if (savedAuftrag.lieferdatum) {
-      try { await onAuftragLieferdatumSet(auftragId); } catch {}
-    }
-    try { await syncReservierungenForAuftrag(auftragId); } catch {}
-    try { await computeBestandsWarnungenForAuftrag(auftragId); } catch {}
-    try { await onAuftragGewichtGeaendert(auftragId); } catch {}
-    if (parsedLieferdatum && kdoc?.email) {
-      try {
-        const pdfBuffer = await generateBelegPdf(auftragId, "auftragsbestaetigung");
-        const bestellDatum = DateTime.fromJSDate(savedAuftrag.createdAt ?? new Date()).setZone(ZONE).toFormat("dd.MM.yyyy");
-        const lieferDatumFormatted = DateTime.fromJSDate(parsedLieferdatum).setZone(ZONE).toFormat("dd.MM.yyyy");
-        await sendAuftragseingangEmail({
-          kundenEmail: kdoc.email,
-          kundenName: kdoc.name || "Kunde",
-          auftragId,
-          auftragNummer: savedAuftrag.auftragsnummer,
-          bestellDatum,
-          lieferDatum: lieferDatumFormatted,
-          pdfBuffer,
-        });
-      } catch (emailErr) {
-        console.error("[MAIL] Auftragsbestätigung konnte nicht gesendet werden:", emailErr);
-      }
-    }
-  })();
+  void runAuftragPostProcessing({
+    auftragId,
+    totalWeight: totals.totalWeight,
+    totalPrice: totals.totalPrice,
+    lieferdatum: parsedLieferdatum,
+    bestellDatumJs: savedAuftrag.createdAt ?? new Date(),
+    auftragsnummer: savedAuftrag.auftragsnummer,
+    kundenEmail: kdoc?.email,
+    kundenName: kdoc?.name,
+  });
 
   return resource;
 }

@@ -386,6 +386,11 @@ export async function createArtikelPosition(data: {
   bemerkung?: string;
   zerlegeBemerkung?: string;
   leergutVonPositionId?: mongoose.Types.ObjectId;
+  // Batch-Modus: Caller übernimmt $addToSet auf den Auftrag und/oder Zerlegeauftrag-Aggregation.
+  _skipAuftragLink?: boolean;
+  _skipZerlegeAuftrag?: boolean;
+  // Vorgeladener Aufpreis (überspringt getKundenPreis-Lookup)
+  _aufpreisOverride?: number;
 }): Promise<ArtikelPositionResource> {
   // --- Validierung ---
   if (!data.artikel) {
@@ -413,7 +418,9 @@ export async function createArtikelPosition(data: {
 
   // --- Aufpreis / Kundenpreis ---
   let aufpreis = 0;
-  if (auftrag?.kunde) {
+  if (typeof data._aufpreisOverride === "number") {
+    aufpreis = data._aufpreisOverride;
+  } else if (auftrag?.kunde) {
     const kundenPreis = await getKundenPreis(
       auftrag.kunde.toString(),
       data.artikel
@@ -451,14 +458,16 @@ export async function createArtikelPosition(data: {
   // --- Auftrag verknüpfen + ggf. Zerlegeauftrag anlegen ---
   if (auftrag) {
     // Auftrag immer verknüpfen (auch Leergut), Reihenfolge wird später durch reorder geregelt
-    await Auftrag.findByIdAndUpdate(
-      auftrag._id,
-      {
-        $addToSet: { artikelPosition: savedPosition._id }
-      }
-    );
+    if (!data._skipAuftragLink) {
+      await Auftrag.findByIdAndUpdate(
+        auftrag._id,
+        {
+          $addToSet: { artikelPosition: savedPosition._id }
+        }
+      );
+    }
 
-    if (data.zerlegung) {
+    if (data.zerlegung && !data._skipZerlegeAuftrag) {
       let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
         auftragId: auftrag._id,
         archiviert: false,
@@ -540,6 +549,9 @@ export async function createArtikelPositionMitPreis(data: {
   vakuum?: boolean;
   bemerkung?: string;
   leerzeile?: boolean;
+  // Batch-Modus: Caller übernimmt $addToSet auf den Auftrag und/oder Zerlegeauftrag-Aggregation.
+  _skipAuftragLink?: boolean;
+  _skipZerlegeAuftrag?: boolean;
 }): Promise<ArtikelPositionResource> {
   if (!isEinheit(data.einheit)) {
     throw new Error("Ungültige Einheit.");
@@ -564,9 +576,11 @@ export async function createArtikelPositionMitPreis(data: {
       bemerkung: (data.bemerkung || "").trim(),
     });
     const saved = await newPosition.save();
-    await Auftrag.findByIdAndUpdate(auftrag._id, {
-      $addToSet: { artikelPosition: saved._id },
-    });
+    if (!data._skipAuftragLink) {
+      await Auftrag.findByIdAndUpdate(auftrag._id, {
+        $addToSet: { artikelPosition: saved._id },
+      });
+    }
     return {
       id: saved._id.toString(),
       artikel: "",
@@ -616,11 +630,13 @@ export async function createArtikelPositionMitPreis(data: {
   const savedPosition = await newPosition.save();
 
   // --- Auftrag verknüpfen + ggf. Zerlegeauftrag ---
-  await Auftrag.findByIdAndUpdate(auftrag._id, {
-    $addToSet: { artikelPosition: savedPosition._id },
-  });
+  if (!data._skipAuftragLink) {
+    await Auftrag.findByIdAndUpdate(auftrag._id, {
+      $addToSet: { artikelPosition: savedPosition._id },
+    });
+  }
 
-  if (data.zerlegung) {
+  if (data.zerlegung && !data._skipZerlegeAuftrag) {
     let zerlegeauftrag = await ZerlegeAuftragModel.findOne({
       auftragId: auftrag._id,
       archiviert: false,
