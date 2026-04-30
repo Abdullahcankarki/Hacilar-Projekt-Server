@@ -43,7 +43,8 @@ app.use('*', express.json({ limit: '10mb' }))
 // TODO: Registrieren Sie hier die weiteren Router:
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://hacilar-api.onrender.com', // dein Frontend in der Cloud
+  'https://hacilar-api.onrender.com',
+  'https://hacilar.onrender.com', // dein Frontend in der Cloud
 ];
 
 app.use(cors({
